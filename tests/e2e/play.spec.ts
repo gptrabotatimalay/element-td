@@ -284,7 +284,7 @@ test("улучшение башни сразу видно в панели", asyn
 
   const cellPoint = (col: number, row: number) =>
     page.evaluate(
-      ([c, r]) => {
+      (cell: { col: number; row: number }) => {
         const canvas =
           document.querySelector<HTMLCanvasElement>(".field canvas")!;
         const rect = canvas.getBoundingClientRect();
@@ -293,11 +293,11 @@ test("улучшение башни сразу видно в панели", asyn
         const offsetX = (canvas.width - 960 * scale) / 2;
         const offsetY = (canvas.height - 640 * scale) / 2;
         return {
-          x: rect.left + ((c * 64 + 32) * scale + offsetX) / dpr,
-          y: rect.top + ((r * 64 + 32) * scale + offsetY) / dpr,
+          x: rect.left + ((cell.col * 64 + 32) * scale + offsetX) / dpr,
+          y: rect.top + ((cell.row * 64 + 32) * scale + offsetY) / dpr,
         };
       },
-      [col, row],
+      { col, row },
     );
 
   await page.locator('.tower-btn[data-element="fire"]').click();

@@ -433,8 +433,18 @@ export function createGameScreen(
     }) as HTMLButtonElement;
     upgradeBtn.disabled = maxed || field.gold < nextCost;
     upgradeBtn.addEventListener("click", () => {
+      const cost = towerCost(tower.element, tower.level + 1);
+      if (maxed || field.gold < cost) {
+        sound.denied();
+        toast("Не хватает золота");
+        return;
+      }
       s.enqueue({ t: "upgrade", field: s.ownField, tower: tower.id });
       sound.upgrade();
+      // Кнопку гасим сразу: команда применится на следующем шаге симуляции,
+      // и без этого можно успеть нажать её несколько раз подряд.
+      upgradeBtn.disabled = true;
+      lastInspect = "";
     });
 
     const sellBtn = el("button", {
@@ -445,6 +455,7 @@ export function createGameScreen(
       s.enqueue({ t: "sell", field: s.ownField, tower: tower.id });
       s.selectedTowerId = null;
       sound.sell();
+      lastInspect = "";
       renderInspect();
     });
 
@@ -464,6 +475,7 @@ export function createGameScreen(
         });
         // Команда применится на следующем тике, а кнопку переключаем сразу.
         tower.targetMode = option.mode;
+        lastInspect = "";
         renderInspect();
       });
       targeting.append(button);
@@ -512,6 +524,7 @@ export function createGameScreen(
           sound.upgrade();
           toast(`${option.recipe.label} собран`);
           s.selectedTowerId = null;
+          lastInspect = "";
           renderInspect();
         });
         row.append(button);
@@ -525,6 +538,37 @@ export function createGameScreen(
 
   let lastWave = -1;
   let lastGold = -1;
+  let lastInspect = "";
+
+  /**
+   * Слепок того, что показывает панель выбранной башни.
+   *
+   * Панель перерисовывается не по таймеру и не на каждое изменение золота
+   * (иначе она мигала бы весь бой), а когда меняется что-то из показанного:
+   * уровень, слияние, приоритет цели, доступность кнопок. Это важно потому,
+   * что команда игрока применяется на следующем шаге симуляции — без такой
+   * сверки нажатие «Улучшить» выглядело так, будто ничего не произошло.
+   */
+  function inspectSignature(s: GameSession): string {
+    if (s.selectedTowerId === null) return "";
+    const field = s.state.fields[s.ownField];
+    const tower = field?.towers.find((t) => t.id === s.selectedTowerId);
+    if (!field || !tower) return "нет";
+
+    const nextCost =
+      tower.level >= TOWER_LEVEL_MAX
+        ? 0
+        : towerCost(tower.element, tower.level + 1);
+    return [
+      tower.id,
+      tower.level,
+      tower.fused ?? "-",
+      tower.targetMode,
+      field.gold >= nextCost ? 1 : 0,
+      Math.round(tower.damageDealt / 50),
+      s.playerField,
+    ].join(":");
+  }
 
   /**
    * Соседи, с которыми выбранную башню можно слить.
@@ -607,6 +651,11 @@ export function createGameScreen(
     }
     if (field.waveIndex !== lastWave) {
       lastWave = field.waveIndex;
+    }
+
+    const signature = inspectSignature(s);
+    if (signature !== lastInspect) {
+      lastInspect = signature;
       renderInspect();
     }
   }

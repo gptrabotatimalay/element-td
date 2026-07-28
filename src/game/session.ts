@@ -199,10 +199,32 @@ export class GameSession {
 
   resize(): void {
     const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(rect.width * dpr);
     this.canvas.height = Math.round(rect.height * dpr);
     this.view = FieldRenderer.fit(this.canvas.width, this.canvas.height);
+  }
+
+  /**
+   * Сверяет размер холста с тем, сколько места он занимает на самом деле.
+   *
+   * Одного вызова resize() при старте мало: панели снизу меняют высоту уже
+   * после первого замера — например, в версусе к ним добавляется ряд кнопок
+   * отправки монстров, и поле сжимается. Холст об этом не узнавал, и дальше
+   * картинка рисовалась в одном масштабе, а клики пересчитывались в другом:
+   * игрок целился в площадку и промахивался мимо неё на десятки пикселей.
+   */
+  private syncCanvasSize(): void {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.round(rect.width * dpr);
+    const height = Math.round(rect.height * dpr);
+    if (width === this.canvas.width && height === this.canvas.height) return;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    this.view = FieldRenderer.fit(width, height);
   }
 
   // ── Цикл ──────────────────────────────────────────────────────────────────
@@ -224,6 +246,7 @@ export class GameSession {
     }
 
     this.effects.update(dt / 1000);
+    this.syncCanvasSize();
     this.render();
   }
 

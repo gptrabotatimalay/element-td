@@ -245,3 +245,76 @@ test("версус: поле соперника можно посмотреть,
   await page.getByRole("button", { name: "Своё поле" }).click();
   await expect(page.locator(".hud__next")).toContainText("следующая волна");
 });
+
+test("холст совпадает с местом, которое занимает на экране", async ({ page }) => {
+  // Панели снизу меняют высоту уже после первого замера холста — в версусе
+  // к ним добавляется ряд кнопок отправки. Если холст об этом не узнает,
+  // картинка рисуется в одном масштабе, а клики считаются в другом, и игрок
+  // промахивается мимо площадок.
+  await page.goto("/");
+  await dismissHelp(page);
+  await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
+  await page.getByRole("button", { name: "Играть", exact: true }).click();
+  await expect(page.locator(".field canvas")).toBeVisible();
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const canvas =
+            document.querySelector<HTMLCanvasElement>(".field canvas")!;
+          const rect = canvas.getBoundingClientRect();
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          return (
+            Math.abs(canvas.width - Math.round(rect.width * dpr)) +
+            Math.abs(canvas.height - Math.round(rect.height * dpr))
+          );
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeLessThanOrEqual(2);
+});
+
+test("улучшение башни сразу видно в панели", async ({ page }) => {
+  // Команда применяется на следующем шаге симуляции. Пока панель не следила
+  // за состоянием башни, нажатие «Улучшить» выглядело так, будто ничего
+  // не произошло: ни списанного золота, ни нового уровня.
+  await startSolo(page);
+  await page.waitForTimeout(600);
+
+  const cellPoint = (col: number, row: number) =>
+    page.evaluate(
+      ([c, r]) => {
+        const canvas =
+          document.querySelector<HTMLCanvasElement>(".field canvas")!;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const scale = Math.min(canvas.width / 960, canvas.height / 640);
+        const offsetX = (canvas.width - 960 * scale) / 2;
+        const offsetY = (canvas.height - 640 * scale) / 2;
+        return {
+          x: rect.left + ((c * 64 + 32) * scale + offsetX) / dpr,
+          y: rect.top + ((r * 64 + 32) * scale + offsetY) / dpr,
+        };
+      },
+      [col, row],
+    );
+
+  await page.locator('.tower-btn[data-element="fire"]').click();
+  const point = await cellPoint(0, 0);
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(400);
+
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator(".inspect__head")).toContainText("уровень 1");
+
+  // Ускоряем время, чтобы накопить на улучшение.
+  await page.locator('.hud__btn[title*="Скорость"]').click();
+  const upgrade = page.getByRole("button", { name: /Улучшить/ });
+  await expect(upgrade).toBeEnabled({ timeout: 40_000 });
+  await upgrade.click();
+
+  await expect(page.locator(".inspect__head")).toContainText("уровень 2", {
+    timeout: 10_000,
+  });
+});

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // У воркера своё окружение: там нет DOM, зато есть WebSocketPair и
+    // Durable Objects. Смешивать эти наборы типов в одном проекте нельзя —
+    // WebSocket в браузере и в воркере это разные интерфейсы.
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["worker", "src/net/protocol.ts", "src/core/types.ts"]
+}

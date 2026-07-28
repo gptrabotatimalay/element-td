@@ -1,0 +1,28 @@
+{
+  "name": "element-td",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "balance": "tsx scripts/balance.ts",
+    "worker": "wrangler dev",
+    "e2e": "playwright test",
+    "deploy": "vite build && wrangler deploy",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json && vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^26.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.99.0"
+  }
+}

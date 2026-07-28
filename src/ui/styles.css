@@ -1,0 +1,655 @@
+/*
+ * Интерфейс поверх холста.
+ *
+ * Всё меряется от размера пальца, а не от курсора: минимальная кнопка 44
+ * пикселя, панели прижаты к краям, ничего важного не прячется под большой
+ * палец в нижних углах. На ноутбуке это просто выглядит крупно, на телефоне —
+ * единственный способ во что-то попасть.
+ */
+
+:root {
+  --ink: #12101a;
+  --frame: #221d2e;
+  --frame-light: #3a3350;
+  --parchment: #e8dcc0;
+  --gold: #f2c14e;
+  --blood: #c0392b;
+  --green: #5ac85a;
+  --muted: #8d84a8;
+
+  --fire: #e04b1f;
+  --ice: #2e93c4;
+  --lightning: #e0bb2e;
+  --earth: #7d5a33;
+  --poison: #5a9c32;
+  --light: #d9be5c;
+
+  --tap: 46px;
+  --gap: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--parchment);
+  font-family: "Trebuchet MS", system-ui, sans-serif;
+  /* Игровое поле не должно тянуться и зумиться жестами. */
+  touch-action: manipulation;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Общие элементы ──────────────────────────────────────────────────────── */
+
+.btn {
+  min-height: var(--tap);
+  padding: 0 16px;
+  border: 2px solid var(--frame-light);
+  border-radius: 6px;
+  background: var(--frame);
+  color: var(--parchment);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    transform 0.06s;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--frame-light);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--gold);
+  border-color: #b8912f;
+  color: var(--ink);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: #ffd469;
+}
+
+.btn--danger {
+  border-color: var(--blood);
+  color: #ff9a8f;
+}
+
+/* ── Меню ────────────────────────────────────────────────────────────────── */
+
+.menu {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(ellipse at 50% 0%, #2a2340 0%, transparent 60%), var(--ink);
+}
+
+.menu__title {
+  margin: 0;
+  font-size: clamp(32px, 9vw, 56px);
+  letter-spacing: 0.16em;
+  color: var(--gold);
+  text-shadow: 0 3px 0 #7a5c14;
+}
+
+.menu__subtitle {
+  margin: -12px 0 4px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.menu__section {
+  width: 100%;
+  max-width: 460px;
+}
+
+.menu__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--gap);
+}
+
+.choice {
+  min-height: var(--tap);
+  padding: 8px 10px;
+  border: 2px solid var(--frame-light);
+  border-radius: 6px;
+  background: var(--frame);
+  color: var(--parchment);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.choice small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.choice[aria-pressed="true"] {
+  border-color: var(--gold);
+  background: #3b3152;
+  color: var(--gold);
+}
+
+.choice[aria-pressed="true"] small {
+  color: #c9b378;
+}
+
+/* ── Игровой экран ───────────────────────────────────────────────────────── */
+
+.game {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.hud {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: calc(6px + env(safe-area-inset-top)) 10px 6px;
+  background: var(--frame);
+  border-bottom: 2px solid var(--frame-light);
+  flex-wrap: wrap;
+}
+
+.hud__stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hud__stat span:first-child {
+  font-size: 15px;
+}
+
+.hud__lives {
+  color: var(--blood);
+}
+
+.hud__gold {
+  color: var(--gold);
+}
+
+.hud__wave {
+  color: var(--parchment);
+}
+
+.hud__spacer {
+  flex: 1;
+}
+
+.hud__btn {
+  min-width: var(--tap);
+  min-height: 38px;
+  padding: 0 10px;
+  border: 2px solid var(--frame-light);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--parchment);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.hud__btn[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.hud__next {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hud__next b {
+  color: var(--parchment);
+}
+
+.field {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  background: #15121f;
+}
+
+/*
+ * Вертикальный экран: холст занимает ровно столько, сколько нужно полю 3:2
+ * при полной ширине. Иначе он растягивался на всю оставшуюся высоту, поле
+ * вписывалось по ширине, и сверху с снизу оставались широкие чёрные полосы.
+ * В ландшафте наоборот — пусть занимает всё доступное место.
+ */
+@media (orientation: portrait) {
+  .field {
+    flex: 0 0 auto;
+    height: calc(100vw / 1.5);
+  }
+}
+
+.field canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Нижняя панель ───────────────────────────────────────────────────────── */
+
+.dock {
+  /* Прижимаем панель к низу: на вертикальном телефоне между полем и
+     кнопками иначе зияет пустая полоса в треть экрана. */
+  margin-top: auto;
+  background: var(--frame);
+  border-top: 2px solid var(--frame-light);
+  padding: var(--gap) 10px calc(var(--gap) + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.towers {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.tower-btn {
+  min-height: 60px;
+  padding: 6px 2px;
+  border: 2px solid var(--frame-light);
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--parchment);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tower-btn canvas {
+  width: 28px;
+  height: 28px;
+  image-rendering: pixelated;
+}
+
+.tower-btn__cost {
+  color: var(--gold);
+  font-size: 11px;
+}
+
+.tower-btn[aria-pressed="true"] {
+  border-color: currentColor;
+  background: #2b2440;
+}
+
+.tower-btn:disabled {
+  opacity: 0.4;
+}
+
+.tower-btn[data-element="fire"] {
+  color: var(--fire);
+}
+.tower-btn[data-element="ice"] {
+  color: var(--ice);
+}
+.tower-btn[data-element="lightning"] {
+  color: var(--lightning);
+}
+.tower-btn[data-element="earth"] {
+  color: var(--earth);
+}
+.tower-btn[data-element="poison"] {
+  color: var(--poison);
+}
+.tower-btn[data-element="light"] {
+  color: var(--light);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.actions .btn {
+  flex: 1;
+  min-width: 92px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+/* Панель выбранной башни. */
+.inspect {
+  border: 2px solid var(--frame-light);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inspect__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.inspect__desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.inspect__stats {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--parchment);
+  flex-wrap: wrap;
+}
+
+.inspect__stats b {
+  color: var(--gold);
+}
+
+.inspect__row {
+  display: flex;
+  gap: 6px;
+}
+
+.inspect__row .btn {
+  flex: 1;
+  font-size: 13px;
+}
+
+.targeting {
+  display: flex;
+  gap: 4px;
+}
+
+.targeting button {
+  flex: 1;
+  min-height: 34px;
+  border: 1px solid var(--frame-light);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.targeting button[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* ── Наложения ───────────────────────────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 7, 15, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 20;
+}
+
+.panel {
+  width: min(440px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--frame);
+  border: 2px solid var(--frame-light);
+  border-radius: 10px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 24px;
+  color: var(--gold);
+}
+
+.panel p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--parchment);
+}
+
+.panel ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.panel li + li {
+  margin-top: 5px;
+}
+
+.panel .btn {
+  width: 100%;
+}
+
+.result__stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.result__stats div {
+  background: var(--ink);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+
+.result__stats b {
+  display: block;
+  color: var(--gold);
+  font-size: 18px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  background: var(--frame);
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  z-index: 30;
+  pointer-events: none;
+  animation: toast 1.6s ease forwards;
+}
+
+@keyframes toast {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  15%,
+  70% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
+/* ── Узкие экраны ────────────────────────────────────────────────────────── */
+
+/*
+ * Вертикальный телефон. Поле 3:2 в такой экран влезает только узкой лентой,
+ * поэтому подсказываем повернуть телефон — в ландшафте поле вдвое крупнее.
+ */
+.rotate-hint {
+  display: none;
+  padding: 6px 10px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--frame);
+}
+
+@media (orientation: portrait) and (max-width: 560px) {
+  .rotate-hint {
+    display: block;
+  }
+}
+
+@media (max-width: 560px) {
+  .hud {
+    gap: 6px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .hud__stat {
+    font-size: 14px;
+  }
+
+  .hud__next {
+    width: 100%;
+    order: 10;
+  }
+
+  .tower-btn {
+    min-height: 54px;
+    font-size: 10px;
+  }
+
+  .tower-btn canvas {
+    width: 24px;
+    height: 24px;
+  }
+}
+
+/*
+ * Лежачий телефон. Высоты всего 390 точек, и панель в три ряда съедала две
+ * трети экрана — поле оставалось узкой полоской. Поэтому здесь всё в один
+ * ряд и мельче: кнопки остаются в пределах пальца, но перестают воевать
+ * с игровым полем за место.
+ */
+@media (max-height: 480px) and (orientation: landscape) {
+  .dock {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  }
+
+  .towers {
+    grid-template-columns: repeat(6, minmax(38px, 1fr));
+    gap: 4px;
+    flex: 1;
+  }
+
+  .tower-btn {
+    min-height: 44px;
+    font-size: 9px;
+    gap: 1px;
+    padding: 3px 1px;
+  }
+
+  .tower-btn canvas {
+    width: 18px;
+    height: 18px;
+  }
+
+  .actions {
+    flex-direction: column;
+    width: 104px;
+    gap: 4px;
+  }
+
+  .actions .btn {
+    min-height: 38px;
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  /* Подпись над отправкой в лежачем режиме только отнимает высоту. */
+  .dock .menu__label {
+    display: none;
+  }
+
+  .inspect {
+    padding: 5px 8px;
+    gap: 4px;
+  }
+
+  .inspect__desc {
+    display: none;
+  }
+
+  .rotate-hint {
+    display: none;
+  }
+}

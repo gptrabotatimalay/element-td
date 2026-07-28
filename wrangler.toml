@@ -1,0 +1,21 @@
+name = "element-td"
+main = "worker/index.ts"
+compatibility_date = "2024-12-01"
+
+# Статика и сервер комнат живут на одном домене — значит игра открывается
+# по обычной ссылке, а сеть работает по тому же адресу без отдельной настройки.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "GameRoom"
+
+# Durable Object на бесплатном тарифе требует хранилища на SQLite.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoom"]
+
+[dev]
+port = 8787

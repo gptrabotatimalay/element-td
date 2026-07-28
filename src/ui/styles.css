@@ -39,6 +39,9 @@ body {
   padding: 0;
   height: 100%;
   overflow: hidden;
+  /* Учитываем вырез и по бокам — в лежачем телефоне он съедает края. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   background: var(--ink);
   color: var(--parchment);
   font-family: "Trebuchet MS", system-ui, sans-serif;
@@ -70,8 +73,10 @@ body {
     transform 0.06s;
 }
 
-.btn:hover:not(:disabled) {
-  background: var(--frame-light);
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    background: var(--frame-light);
+  }
 }
 
 .btn:active:not(:disabled) {
@@ -89,8 +94,10 @@ body {
   color: var(--ink);
 }
 
-.btn--primary:hover:not(:disabled) {
-  background: #ffd469;
+@media (hover: hover) {
+  .btn--primary:hover:not(:disabled) {
+    background: #ffd469;
+  }
 }
 
 .btn--danger {
@@ -210,6 +217,12 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  /*
+   * Над полем не должно быть ни прокрутки, ни двухпальцевого масштабирования:
+   * попытка поставить башню двумя пальцами растягивала страницу, и вернуть её
+   * обратно можно было только перезагрузкой.
+   */
+  touch-action: none;
 }
 
 /* Боковая панель со всем управлением. */
@@ -218,7 +231,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--gap);
-  padding: var(--gap) 10px calc(var(--gap) + env(safe-area-inset-bottom));
+  /* Вырез сверху обходит панель, а не показатели внутри неё. */
+  padding: calc(var(--gap) + env(safe-area-inset-top)) 10px
+    calc(var(--gap) + env(safe-area-inset-bottom));
   background: var(--frame);
   border-left: 2px solid var(--frame-light);
   overflow-y: auto;
@@ -260,7 +275,7 @@ body {
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
-  padding: calc(4px + env(safe-area-inset-top)) 2px 4px;
+  padding: 4px 2px;
 }
 
 .hud__controls {
@@ -523,7 +538,12 @@ body {
 
   .board {
     flex: 0 0 auto;
-    height: 52vh;
+    /*
+     * Доля свободной высоты, а не всего экрана: на телефонах адресная строка
+     * съедает часть окна, и 52vh оказывались больше, чем реально доступно.
+     */
+    height: 52dvh;
+    padding-top: env(safe-area-inset-top);
   }
 
   .side {
@@ -531,6 +551,7 @@ body {
     min-height: 0;
     border-left: none;
     border-top: 2px solid var(--frame-light);
+    padding-top: var(--gap);
   }
 
   .hud {
@@ -614,6 +635,16 @@ body {
 
   .rival {
     flex-direction: column;
+  }
+
+  /* Панель узкая — кнопкам действий нужна вся её ширина. */
+  .actions .btn {
+    min-height: 36px;
+    font-size: 11px;
+  }
+
+  .side__inspect {
+    min-height: 0;
   }
 }
 
@@ -803,8 +834,7 @@ body {
   }
 
   .actions {
-    flex-direction: column;
-    width: 104px;
+    grid-template-columns: 1fr;
     gap: 4px;
   }
 

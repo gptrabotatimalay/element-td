@@ -74,6 +74,10 @@ export class RoomClient {
   onRemoteCommand: ((cmd: Command, from: number) => void) | null = null;
   /** Хост пропал уже посреди партии — считать её больше некому. */
   onHostGone: (() => void) | null = null;
+  /** Связь потеряна окончательно, уже во время партии. */
+  onConnectionLost: ((message: string) => void) | null = null;
+  /** Состав комнаты изменился: кто-то вошёл или вышел. */
+  onRoster: ((players: PlayerInfo[]) => void) | null = null;
   players: PlayerInfo[] = [];
   latency = 0;
   connection: ConnectionState = "connecting";
@@ -145,6 +149,7 @@ export class RoomClient {
         // Хост мог смениться, пока нас не было.
         this.isHost = message.hostIndex === this.you;
         this.handlers.onPlayers?.(message.players, message.hostIndex);
+        this.onRoster?.(message.players);
         break;
       case "config":
         this.handlers.onConfig?.(message.config);
@@ -206,11 +211,16 @@ export class RoomClient {
     if (this.retries >= RETRIES_BEFORE_GIVING_UP) {
       this.closedByUs = true;
       this.setConnection("closed");
-      this.handlers.onError?.(
-        "Сервер комнат недоступен. Сетевая игра работает только там, " +
-          "где запущен сервер: локально командой «npm run worker» или на " +
-          "опубликованной версии. Соло и версус с ботом доступны всегда.",
-      );
+      // Если мы уже были в комнате, дело не в отсутствии сервера, а в
+      // потерянной связи — и говорить надо именно это.
+      const message =
+        this.you >= 0
+          ? "Связь с комнатой потеряна. Партию продолжить не получится."
+          : "Сервер комнат недоступен. Сетевая игра работает только там, " +
+            "где запущен сервер: локально командой «npm run worker» или на " +
+            "опубликованной версии. Соло и версус с ботом доступны всегда.";
+      this.handlers.onError?.(message);
+      this.onConnectionLost?.(message);
       return;
     }
 

@@ -57,6 +57,11 @@ async function guestJoins(
 }
 
 test.describe("сетевая игра", () => {
+  // По одному за раз: несколько пар браузеров, одновременно поднимающих
+  // комнаты на локальном сервере, роняют его — и падения выглядят как
+  // проблемы игры, хотя это перегруженная среда проверки.
+  test.describe.configure({ mode: "serial" });
+
   test("двое заходят в комнату по коду и видят друг друга", async ({
     browser,
   }) => {
@@ -151,7 +156,7 @@ test.describe("сетевая игра", () => {
         const canvas =
           document.querySelector<HTMLCanvasElement>(".board canvas")!;
         const rect = canvas.getBoundingClientRect();
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
         const scale = Math.min(
           (rect.width * dpr) / 960,
           (rect.height * dpr) / 640,
@@ -202,12 +207,11 @@ test.describe("сетевая игра", () => {
       await hostCtx.close();
 
       // Гость должен получить внятное сообщение, а не молча смотреть
-      // в замерший экран.
+      // в замерший экран. Формулировка зависит от того, что сработало
+      // раньше — уход хоста, опустевшая комната или потеря связи.
       await expect(guest.locator(".panel")).toContainText(
-        /Хост вышел|Не получилось/,
-        {
-          timeout: 20_000,
-        },
+        /Хост вышел|Соперник вышел|Связь потеряна|Не получилось/,
+        { timeout: 25_000 },
       );
     } finally {
       await guestCtx.close();

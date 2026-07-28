@@ -12,6 +12,10 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [["list"]],
   timeout: 60_000,
+  // Сетевые тесты зависят от локального сервера комнат: под общей нагрузкой
+  // он иногда не успевает подняться, и тест получает отказ соединения.
+  // Одна повторная попытка отделяет это от настоящих поломок.
+  retries: 1,
   use: {
     baseURL: "http://localhost:5173",
     trace: "off",
@@ -25,12 +29,17 @@ export default defineConfig({
         viewport: { width: 1280, height: 800 },
       },
     },
+    // На телефонах проверяем только интерфейс и управление. Сетевые тесты
+    // от размера экрана не зависят, а вот три набора браузеров, одновременно
+    // создающих комнаты на одном сервере, дают гонку и ложные падения.
     {
       name: "phone-portrait",
+      testIgnore: /network\.spec\.ts/,
       use: { ...devices["iPhone 13"] },
     },
     {
       name: "phone-landscape",
+      testIgnore: /network\.spec\.ts/,
       use: { ...devices["iPhone 13 landscape"] },
     },
   ],

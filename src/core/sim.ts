@@ -113,6 +113,7 @@ export function createGame(options: GameOptions): GameState {
       occupied: new Map(),
       auraCache: new Map(),
       alive: true,
+      rushedThisWave: false,
       events: [],
       stats: {
         goldEarned: 0,
@@ -121,6 +122,7 @@ export function createGame(options: GameOptions): GameState {
         creepsLeaked: 0,
         wavesSurvived: 0,
         sentCount: 0,
+        sentByKind: {},
         healCount: 0,
       },
     });
@@ -198,6 +200,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       const index = field.towers.findIndex((t) => t.id === cmd.tower);
       if (index < 0) return false;
       const tower = field.towers[index]!;
+      releaseProjectiles(field, tower.id);
       const refund = Math.floor(
         tower.invested * DIFFICULTY[state.difficulty].sellRefund,
       );
@@ -222,9 +225,11 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       const send = SEND[cmd.kind];
       if (!send) return false;
 
-      // Каждая следующая отправка того же типа дорожает — иначе весь
-      // версус сводится к спаму одним самым выгодным монстром.
-      const alreadySent = field.stats.sentCount;
+      // Каждая следующая отправка того же типа дорожает — иначе весь версус
+      // сводится к спаму одним самым выгодным монстром. Считать надо именно
+      // по типу: от общего счётчика дорожали и те монстры, которых игрок
+      // ещё ни разу не посылал.
+      const alreadySent = field.stats.sentByKind[cmd.kind] ?? 0;
       const cost = Math.round(
         send.cost * Math.pow(SEND_COST_ESCALATION, alreadySent),
       );
@@ -233,6 +238,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       field.gold -= cost;
       field.stats.goldSpent += cost;
       field.stats.sentCount++;
+      field.stats.sentByKind[cmd.kind] = alreadySent + 1;
       field.income += send.income;
 
       const kindCfg = CREEP_KIND[cmd.kind];
@@ -252,12 +258,20 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
 
     case "rush": {
       if (field.waveTimer <= 0) return false;
-      // Досрочный призыв обменивает время на золото: чем раньше зовёшь,
-      // тем больше получаешь и тем сильнее рискуешь наложением волн.
+      // Один призыв на волну. Иначе команда обнуляет таймер, обработка волн
+      // тут же ставит его заново, и следующий тик снова принимает призыв —
+      // выплаты идут потоком, а волны сыплются лавиной.
+      if (field.rushedThisWave) return false;
+
+      // После последней волны звать некого, а золото раньше продолжало капать.
+      const totalWaves = LENGTH[state.length].totalWaves;
+      if (totalWaves !== null && field.waveIndex >= totalWaves) return false;
+
       const bonus = Math.round(field.waveTimer * RUSH_GOLD_PER_TICK);
       field.gold += bonus;
       field.stats.goldEarned += bonus;
       field.waveTimer = 0;
+      field.rushedThisWave = true;
       return true;
     }
 
@@ -271,7 +285,12 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       if (!areNeighbours(main.cell, other.cell)) return false;
       if (!findFusion(main.element, other.element)) return false;
 
-      const cost = Math.round(other.invested * FUSION_COST_SHARE);
+      // Считаем от вложенного в обе башни. Раньше цена бралась только с
+      // жертвы: слить дешёвую башню первого уровня с максимальной стоило
+      // копейки и давало ей четверть урона сверху даром.
+      const cost = Math.round(
+        (main.invested + other.invested) * FUSION_COST_SHARE,
+      );
       if (field.gold < cost) return false;
 
       field.gold -= cost;
@@ -280,6 +299,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       main.level = Math.max(main.level, other.level);
       main.invested += other.invested + cost;
 
+      releaseProjectiles(field, other.id);
       field.occupied.delete(other.cell);
       field.towers.splice(field.towers.indexOf(other), 1);
       recalcAuras(field);
@@ -296,6 +316,33 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       return true;
     }
   }
+}
+
+/**
+ * Снимает бронь урона со снарядов исчезнувшей башни.
+ *
+ * Летящие снаряды учитываются в поле incoming, чтобы другие башни не
+ * стреляли по уже обречённой цели. Если башня продана или слита, её снаряды
+ * до цели не долетят, и бронь надо снять — иначе монстр до конца жизни
+ * считается обречённым, и по нему никто больше не стреляет.
+ */
+function releaseProjectiles(field: Field, towerId: number): void {
+  let write = 0;
+  for (const projectile of field.projectiles) {
+    if (projectile.towerId === towerId) {
+      const target = field.creeps.find((c) => c.id === projectile.targetId);
+      if (target) {
+        target.incoming = Math.max(
+          0,
+          target.incoming -
+            effectiveDamage(target, projectile.damage, projectile.damageType),
+        );
+      }
+      continue;
+    }
+    field.projectiles[write++] = projectile;
+  }
+  field.projectiles.length = write;
 }
 
 /** Соседние ли клетки, включая диагонали. */
@@ -352,6 +399,7 @@ function updateWaves(state: GameState, field: Field, rng: Rng): void {
   }
 
   spawnWave(state, field, rng);
+  field.rushedThisWave = false;
   field.events.push({
     t: "wave",
     index: field.waveIndex + 1,
@@ -561,6 +609,9 @@ function pickTarget(field: Field, tower: Tower, range: number): Creep | null {
 
   for (const c of field.creeps) {
     if (c.flying && !canHitAir) continue;
+    // Убитые на этом тике исчезнут только при следующей обработке движения,
+    // но стрелять по ним уже незачем.
+    if (c.hp <= 0) continue;
     const dx = c.x - tower.x;
     const dy = c.y - tower.y;
     const distSq = dx * dx + dy * dy;
@@ -939,6 +990,6 @@ export function sendCost(field: Field, kind: CreepKind): number | null {
   const send = SEND[kind];
   if (!send) return null;
   return Math.round(
-    send.cost * Math.pow(SEND_COST_ESCALATION, field.stats.sentCount),
+    send.cost * Math.pow(SEND_COST_ESCALATION, field.stats.sentByKind[kind] ?? 0),
   );
 }

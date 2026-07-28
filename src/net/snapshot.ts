@@ -61,6 +61,8 @@ function encodeField(field: Field): FieldSnapshot {
       t.level,
       TARGET_MODES.indexOf(t.targetMode),
       t.fused ? ELEMENTS.indexOf(t.fused) : -1,
+      // Без этого у гостя цена продажи и цена слияния показывались нулями.
+      Math.round(t.invested),
     ]),
     projectiles: field.projectiles.map((p) => [
       round(p.x),
@@ -118,7 +120,7 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
       fused: t[5] >= 0 ? (ELEMENTS[t[5]] ?? null) : null,
       cooldown: 0,
       targetMode: TARGET_MODES[t[4]] ?? "closest",
-      invested: 0,
+      invested: t[6] ?? 0,
       damageDealt: 0,
     };
   });
@@ -154,6 +156,7 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
     occupied,
     auraCache: new Map(),
     alive: snapshot.alive,
+    rushedThisWave: false,
     events: [],
     stats: {
       goldEarned: 0,
@@ -162,6 +165,7 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
       creepsLeaked: 0,
       wavesSurvived: snapshot.wave,
       sentCount: snapshot.sentCount,
+      sentByKind: {},
       healCount: snapshot.healCount,
     },
   };

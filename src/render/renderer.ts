@@ -52,12 +52,49 @@ export interface RenderOptions {
   alpha: number;
 }
 
+/** Портал, из которого выходят монстры. */
+function drawPortal(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string,
+): void {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, 18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = PALETTE.ink;
+  ctx.beginPath();
+  ctx.arc(x, y, 11, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** База, которую защищают. */
+function drawBase(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = PALETTE.stoneDark;
+  ctx.fillRect(x - 22, y - 22, 44, 44);
+  ctx.fillStyle = PALETTE.stone;
+  ctx.fillRect(x - 18, y - 18, 36, 36);
+  ctx.fillStyle = PALETTE.gold;
+  ctx.fillRect(x - 8, y - 8, 16, 16);
+}
+
 /** Запомненные позиции прошлого тика — нужны только для сглаживания. */
 type PrevPositions = Map<number, { x: number; y: number }>;
 
 export class FieldRenderer {
   private prev: PrevPositions = new Map();
   private lastTick = -1;
+
+  /**
+   * Готовая подложка: трава, дорога, площадки, портал и база.
+   *
+   * Всё это не меняется за партию ни разу, а рисовалось заново каждый кадр —
+   * почти две сотни вызовов отрисовки по тайлам, шестьдесят раз в секунду.
+   * Теперь картинка собирается один раз и кладётся одним вызовом.
+   */
+  private background: HTMLCanvasElement | null = null;
+  private backgroundMapId = "";
 
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
 
@@ -140,8 +177,8 @@ export class FieldRenderer {
     ctx.imageSmoothingEnabled = false;
     FieldRenderer.applyTransform(ctx, view);
 
-    this.drawGround(map);
-    this.drawPads(map, options.hoverCell);
+    ctx.drawImage(this.groundLayer(map), 0, 0);
+    this.drawHover(map, options.hoverCell);
     this.drawRanges(field, options);
     this.drawTowers(field);
     this.drawCreeps(field, tick, options.alpha);
@@ -150,8 +187,18 @@ export class FieldRenderer {
     ctx.restore();
   }
 
-  private drawGround(map: GameMap): void {
-    const ctx = this.ctx;
+  /** Подложка карты. Рисуется один раз на карту и кэшируется. */
+  private groundLayer(map: GameMap): HTMLCanvasElement {
+    if (this.background && this.backgroundMapId === map.id) {
+      return this.background;
+    }
+
+    const layer = document.createElement("canvas");
+    layer.width = FIELD_WIDTH;
+    layer.height = FIELD_HEIGHT;
+    const ctx = layer.getContext("2d")!;
+    ctx.imageSmoothingEnabled = false;
+
     for (let row = 0; row < FIELD_HEIGHT / CELL_SIZE; row++) {
       for (let col = 0; col < FIELD_WIDTH / CELL_SIZE; col++) {
         const cell = row * (FIELD_WIDTH / CELL_SIZE) + col;
@@ -167,63 +214,45 @@ export class FieldRenderer {
       }
     }
 
+    const pad = tileSprite("pad", 0);
+    for (const cell of map.buildCells) {
+      ctx.drawImage(
+        pad,
+        cellCol(cell) * CELL_SIZE,
+        cellRow(cell) * CELL_SIZE,
+        CELL_SIZE,
+        CELL_SIZE,
+      );
+    }
+
     // Вход и база — самые важные точки на поле, помечаем явно.
     const start = map.path[0]!;
     const end = map.path[map.path.length - 1]!;
-    this.drawPortal(start.x, start.y, PALETTE.blood);
-    this.drawBase(end.x, end.y);
+    drawPortal(ctx, start.x, start.y, PALETTE.blood);
+    drawBase(ctx, end.x, end.y);
+
+    this.background = layer;
+    this.backgroundMapId = map.id;
+    return layer;
   }
 
-  private drawPortal(x: number, y: number, color: string): void {
+  /** Рамка на клетке под курсором. Единственное, что меняется в подложке. */
+  private drawHover(map: GameMap, hoverCell: number | null): void {
+    if (hoverCell === null || !map.buildSet.has(hoverCell)) return;
     const ctx = this.ctx;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(x, y, 18, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = PALETTE.ink;
-    ctx.beginPath();
-    ctx.arc(x, y, 11, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.strokeStyle = PALETTE.padGlow;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(
+      cellCol(hoverCell) * CELL_SIZE + 2,
+      cellRow(hoverCell) * CELL_SIZE + 2,
+      CELL_SIZE - 4,
+      CELL_SIZE - 4,
+    );
   }
 
-  private drawBase(x: number, y: number): void {
-    const ctx = this.ctx;
-    ctx.fillStyle = PALETTE.stoneDark;
-    ctx.fillRect(x - 22, y - 22, 44, 44);
-    ctx.fillStyle = PALETTE.stone;
-    ctx.fillRect(x - 18, y - 18, 36, 36);
-    ctx.fillStyle = PALETTE.gold;
-    ctx.fillRect(x - 8, y - 8, 16, 16);
-  }
 
-  private drawPads(map: GameMap, hoverCell: number | null): void {
-    const ctx = this.ctx;
-    for (const cell of map.buildCells) {
-      const col = cellCol(cell);
-      const row = cellRow(cell);
-      const sprite = tileSprite("pad", 0);
-      ctx.drawImage(
-        sprite,
-        col * CELL_SIZE,
-        row * CELL_SIZE,
-        CELL_SIZE,
-        CELL_SIZE,
-      );
-    }
 
-    if (hoverCell !== null && map.buildSet.has(hoverCell)) {
-      const col = cellCol(hoverCell);
-      const row = cellRow(hoverCell);
-      ctx.strokeStyle = PALETTE.padGlow;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(
-        col * CELL_SIZE + 2,
-        row * CELL_SIZE + 2,
-        CELL_SIZE - 4,
-        CELL_SIZE - 4,
-      );
-    }
-  }
+
 
   private drawRanges(field: Field, options: RenderOptions): void {
     const ctx = this.ctx;

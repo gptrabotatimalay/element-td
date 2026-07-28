@@ -8,6 +8,7 @@
 import { sound } from "../audio/sound";
 import { MAPS } from "../core/map";
 import { GameSession } from "../game/session";
+import type { RoomClient } from "../net/client";
 import type {
   Difficulty,
   GameMode,
@@ -32,6 +33,8 @@ interface MatchSetup {
   length: MatchLength;
   mapId: string;
   botStrategy?: string;
+  /** Партия по сети: повторить её кнопкой «Ещё раз» нельзя. */
+  network?: boolean;
 }
 
 const DIFFICULTY_LABELS: { id: Difficulty; label: string; hint: string }[] = [
@@ -57,6 +60,7 @@ export class App {
   private root: HTMLElement;
   private session: GameSession | null = null;
   private screen: GameScreenHandles | null = null;
+  private client: RoomClient | null = null;
 
   private setup: MatchSetup;
 
@@ -267,6 +271,7 @@ export class App {
     const { client, config, isHost, you } = result;
     this.teardown();
     clear(this.root);
+    this.client = client;
 
     const screen = createGameScreen(
       () => this.session!,
@@ -290,12 +295,17 @@ export class App {
       {
         onStateChange: (state) => screen.update(state),
         onGameOver: (state) =>
-          this.showResult(state, {
-            mode: config.mode,
-            difficulty: config.difficulty,
-            length: config.length,
-            mapId: config.mapId,
-          }),
+          this.showResult(
+            state,
+            {
+              mode: config.mode,
+              difficulty: config.difficulty,
+              length: config.length,
+              mapId: config.mapId,
+              network: true,
+            },
+            config.mode === "coop" ? 0 : you,
+          ),
       },
     );
 
@@ -311,12 +321,35 @@ export class App {
     session.attachMinimap(screen.rivalCanvas);
 
     client.onSnapshotReceived = (snapshot) => session.applySnapshot(snapshot);
-    client.onRemoteCommand = (cmd) => session.enqueueRemote(cmd);
+    // Поле определяется отправителем: в коопе оно общее, в версусе своё
+    // у каждого. Команду «за соседа» хост принимать не должен.
+    client.onRemoteCommand = (cmd, from) =>
+      session.enqueueRemote(cmd, config.mode === "coop" ? 0 : from);
     // Партию считает только хост. Если он ушёл, гостю незачем смотреть
     // в застывшее поле — говорим прямо и возвращаем в меню.
     client.onHostGone = () => {
       this.session?.stop();
-      this.showInterrupted("Хост вышел из игры", "Партию продолжать некому — второй игрок закрыл вкладку или потерял связь.");
+      this.showInterrupted(
+        "Хост вышел из игры",
+        "Партию продолжать некому — второй игрок закрыл вкладку или потерял связь.",
+      );
+    };
+
+    // Обрыв связи посреди партии раньше сообщался в панель лобби, которой
+    // к этому моменту уже нет в документе — игрок просто смотрел в замерший экран.
+    client.onConnectionLost = (message) => {
+      this.session?.stop();
+      this.showInterrupted("Связь потеряна", message);
+    };
+
+    // Уход соперника видит и хост: считать партию в пустоту незачем.
+    client.onRoster = (players) => {
+      if (players.length >= 2 || this.session?.state.over) return;
+      this.session?.stop();
+      this.showInterrupted(
+        "Соперник вышел",
+        "Второй игрок покинул комнату. Партию можно начать заново из меню.",
+      );
     };
 
     this.session = session;
@@ -343,9 +376,16 @@ export class App {
     this.root.append(overlay);
   }
 
-  private showResult(state: GameState, setup: MatchSetup): void {
-    const field = state.fields[0]!;
-    const won = state.winner === 0;
+  private showResult(
+    state: GameState,
+    setup: MatchSetup,
+    playerIndex = 0,
+  ): void {
+    // Смотреть надо на своё поле: у гостя сетевого версуса нулевое поле
+    // принадлежит хосту, и экран показывал чужой результат с обратным
+    // вердиктом — выиграл, а написано «Поражение».
+    const field = state.fields[playerIndex] ?? state.fields[0]!;
+    const won = state.winner === playerIndex;
     saveRecord({
       waves: field.stats.wavesSurvived,
       difficulty: setup.difficulty,
@@ -382,19 +422,31 @@ export class App {
       ]),
     ]);
 
-    const again = el("button", { class: "btn btn--primary", text: "Ещё раз" });
-    again.addEventListener("click", () => {
-      overlay.remove();
-      this.startMatch(setup);
-    });
+    const buttons: HTMLElement[] = [];
 
-    const toMenu = el("button", { class: "btn", text: "В меню" });
+    // Сетевую партию нельзя просто «повторить»: соперник за это время мог
+    // закрыть вкладку, а прежний запуск создавал локальный матч с пустым
+    // вторым полем и оставлял сокет висеть.
+    if (!setup.network) {
+      const again = el("button", { class: "btn btn--primary", text: "Ещё раз" });
+      again.addEventListener("click", () => {
+        overlay.remove();
+        this.startMatch(setup);
+      });
+      buttons.push(again);
+    }
+
+    const toMenu = el("button", {
+      class: setup.network ? "btn btn--primary" : "btn",
+      text: "В меню",
+    });
     toMenu.addEventListener("click", () => {
       overlay.remove();
       this.showMenu();
     });
+    buttons.push(toMenu);
 
-    panel.append(again, toMenu);
+    panel.append(...buttons);
     overlay.append(panel);
     this.root.append(overlay);
   }
@@ -447,5 +499,9 @@ export class App {
     this.session = null;
     this.screen?.destroy();
     this.screen = null;
+    // Соединение переживало выход из партии: сокет и таймер проверки связи
+    // продолжали работать и стучаться в разрушенный экран.
+    this.client?.close();
+    this.client = null;
   }
 }

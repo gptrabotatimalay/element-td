@@ -97,8 +97,16 @@ export type CreepTuple = [
   number,
 ];
 
-/** [id, cell, element, level, targetMode, вторая стихия или -1] */
-export type TowerTuple = [number, number, number, number, number, number];
+/** [id, cell, element, level, targetMode, вторая стихия или -1, вложено золота] */
+export type TowerTuple = [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
 
 /** [x, y, element, splash] */
 export type ProjectileTuple = [number, number, number, number];

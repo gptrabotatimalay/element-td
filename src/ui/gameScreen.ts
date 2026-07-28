@@ -329,26 +329,67 @@ export function createGameScreen(
     speedBtn.textContent = `${s.speed}×`;
   }
 
+  /*
+   * Ввод по полю.
+   *
+   * Действие происходит по отпусканию, а не по нажатию, и только если палец
+   * почти не сдвинулся. Иначе любой свайп по карте ставил башню и тратил
+   * золото, а каждый лишний палец на экране считался отдельным нажатием.
+   */
+  const TAP_SLOP = 12;
+  let activePointer: number | null = null;
+  let pressX = 0;
+  let pressY = 0;
+
   canvas.addEventListener("pointermove", (event) => {
     if (event.pointerType === "mouse")
       session().setHover(event.clientX, event.clientY);
   });
   canvas.addEventListener("pointerleave", () => session().clearHover());
+
   canvas.addEventListener("pointerdown", (event) => {
+    // Второй и последующие пальцы игнорируем целиком.
+    if (activePointer !== null) return;
     event.preventDefault();
+    activePointer = event.pointerId;
+    pressX = event.clientX;
+    pressY = event.clientY;
+    if (event.pointerType !== "mouse")
+      session().setHover(event.clientX, event.clientY);
+  });
+
+  const finishPointer = (event: PointerEvent, apply: boolean): void => {
+    if (event.pointerId !== activePointer) return;
+    activePointer = null;
     const s = session();
-    // Палец не наводит курсор — подсветку выставляем прямо в момент касания.
-    if (event.pointerType !== "mouse") s.setHover(event.clientX, event.clientY);
-    s.handleTap(event.clientX, event.clientY);
-    // Касанием подсветку сразу и снимаем, иначе рамка залипает на клетке.
+
+    const moved =
+      Math.abs(event.clientX - pressX) > TAP_SLOP ||
+      Math.abs(event.clientY - pressY) > TAP_SLOP;
+
     if (event.pointerType !== "mouse") s.clearHover();
+    if (!apply || moved) return;
+
+    s.handleTap(event.clientX, event.clientY);
     lastInspect = "";
     refreshTowerButtons();
     renderInspect();
-  });
+  };
+
+  canvas.addEventListener("pointerup", (event) => finishPointer(event, true));
+  canvas.addEventListener("pointercancel", (event) =>
+    finishPointer(event, false),
+  );
 
   const onKey = (event: KeyboardEvent): void => {
     if (event.repeat) return;
+    // Поверх окна итогов или правил игровые клавиши только мешают: пробел
+    // ставил партию на паузу вместо нажатия кнопки под фокусом.
+    if (document.querySelector(".overlay")) return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.isContentEditable)) {
+      return;
+    }
     const s = session();
     switch (event.key.toLowerCase()) {
       case " ":
@@ -716,15 +757,16 @@ export function createGameScreen(
       tower.fused ?? "-",
       tower.targetMode,
       own.gold >= nextCost ? 1 : 0,
-      Math.round(tower.damageDealt / 50),
       s.playerField,
       availableFusions(s, tower).length,
     ].join(":");
   }
 
   let lastGold = -1;
+  let lastSeconds = -1;
   let lastInspect = "";
   let versusReady = false;
+  let controlsChecked = false;
 
   function update(state: GameState): void {
     const s = session();
@@ -741,10 +783,13 @@ export function createGameScreen(
       total === null ? `${own.waveIndex}` : `${own.waveIndex} / ${total}`;
 
     const seconds = Math.ceil(own.waveTimer / TICK_RATE);
-    nextEl.innerHTML =
-      own.waveTimer > 0
-        ? `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`
-        : "волна идёт";
+    if (seconds !== lastSeconds) {
+      lastSeconds = seconds;
+      nextEl.innerHTML =
+        own.waveTimer > 0
+          ? `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`
+          : "волна идёт";
+    }
 
     const cost = healCost(own.stats.healCount);
     healBtn.textContent = `Жизнь · ${formatNumber(cost)}`;
@@ -753,6 +798,15 @@ export function createGameScreen(
 
     // Блоки для игры вдвоём появляются один раз, когда становится ясно,
     // что полей действительно два.
+    if (!controlsChecked) {
+      controlsChecked = true;
+      if (s.role === "guest") {
+        // Партию считает хост: местная пауза и ускорение ни на что не влияют.
+        pauseBtn.style.display = "none";
+        speedBtn.style.display = "none";
+      }
+    }
+
     if (!versusReady && state.fields.length > 1) {
       versusReady = true;
       rivalBlock.style.display = "";

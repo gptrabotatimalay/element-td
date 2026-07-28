@@ -17,8 +17,12 @@ async function canvasHasContent(page: Page): Promise<boolean> {
     if (!ctx) return false;
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const distinct = new Set<string>();
-    // Каждый сотый пиксель: важно наличие разных цветов, а не заливка одним.
-    for (let i = 0; i < data.length; i += 400) {
+    // Шаг выборки — простое число пикселей, а не круглая сотня.
+    // При круглом шаге и ширине холста, кратной ему (например 1500 точек на
+    // экране с тройной плотностью), проба всегда попадает в одну и ту же
+    // колонку: получается муар, и полностью нарисованное поле выглядит
+    // как заливка четырьмя цветами.
+    for (let i = 0; i < data.length; i += 4 * 997) {
       distinct.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
     }
     return distinct.size > 5;
@@ -54,7 +58,7 @@ async function cellPoint(
     (cell: { col: number; row: number }) => {
       const canvas = document.querySelector<HTMLCanvasElement>(".board canvas")!;
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
       const straight = Math.min(canvas.width / 960, canvas.height / 640);
       const turned = Math.min(canvas.width / 640, canvas.height / 960);
       const rotated = turned > straight;
@@ -288,7 +292,7 @@ test("холст совпадает с местом, которое занима
           const canvas =
             document.querySelector<HTMLCanvasElement>(".board canvas")!;
           const rect = canvas.getBoundingClientRect();
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
           return (
             Math.abs(canvas.width - Math.round(rect.width * dpr)) +
             Math.abs(canvas.height - Math.round(rect.height * dpr))

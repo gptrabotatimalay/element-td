@@ -38,6 +38,20 @@ const MAX_CATCHUP_STEPS = 6;
  */
 const SNAPSHOT_EVERY_TICKS = 3;
 
+/** Как часто перерисовывается поле соперника, в миллисекундах. */
+const MINIMAP_INTERVAL_MS = 100;
+
+/**
+ * Плотность пикселей холста.
+ *
+ * Ограничение двойкой оставляло экраны с плотностью 3 без целого числа
+ * экранных пикселей на игровой — пиксель-арт на них мылился по краям.
+ * Целое значение сохраняет резкость и не раздувает холст сверх нужного.
+ */
+function canvasScale(): number {
+  return Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
+}
+
 /**
  * Роль в партии.
  *  local — обычная одиночная игра;
@@ -66,6 +80,7 @@ export class GameSession {
   readonly map: GameMap;
 
   private renderer: FieldRenderer;
+  private readonly ctx: CanvasRenderingContext2D;
   private effects = new EffectLayer();
   private view: ViewTransform = {
     scale: 1,
@@ -85,12 +100,21 @@ export class GameSession {
    */
   private minimapCanvas: HTMLCanvasElement | null = null;
   private minimapRenderer: FieldRenderer | null = null;
+  private minimapCtx: CanvasRenderingContext2D | null = null;
   private minimapView: ViewTransform = {
     scale: 1,
     offsetX: 0,
     offsetY: 0,
     rotated: false,
   };
+  /**
+   * Поле соперника обновляется реже основного.
+   *
+   * Оно вчетверо меньше и служит для обзора, а не для точных действий —
+   * рисовать его шестьдесят раз в секунду значит удваивать всю отрисовку
+   * ради картинки, на которой разница между кадрами не видна.
+   */
+  private minimapDrawnAt = 0;
 
   private accumulator = 0;
   private lastFrame = 0;
@@ -103,6 +127,7 @@ export class GameSession {
   role: SessionRole = "local";
   /** Последний снимок от хоста — гость рисует именно его. */
   private lastSnapshotTick = -1;
+  private lastSnapshotAt = 0;
 
   /**
    * Поле, которым управляет этот клиент. Команды всегда уходят сюда.
@@ -110,8 +135,21 @@ export class GameSession {
    * продолжая строить у себя.
    */
   ownField = 0;
+
   /** Поле, которое сейчас нарисовано на экране. */
-  playerField = 0;
+  get playerField(): number {
+    return this.viewField;
+  }
+
+  set playerField(index: number) {
+    if (this.viewField === index) return;
+    this.viewField = index;
+    // Вспышки и следы молний относятся к прежнему полю: если их не убрать,
+    // они дорисовываются поверх чужой карты.
+    this.effects.clear();
+  }
+
+  private viewField = 0;
   placement: PlacementMode = { kind: "none" };
   hoverCell: number | null = null;
   selectedTowerId: number | null = null;
@@ -128,6 +166,7 @@ export class GameSession {
     this.map = getMap(options.mapId);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Холст не поддерживается этим браузером");
+    this.ctx = ctx;
     this.renderer = new FieldRenderer(ctx);
 
     if (botStrategy) {
@@ -184,7 +223,14 @@ export class GameSession {
     this.lastSnapshotTick = snapshot.tick;
 
     this.state.tick = snapshot.tick;
-    this.state.fields = snapshot.fields.map((field, index) => decodeField(field, index));
+    this.state.fields = snapshot.fields.map((field, index) =>
+      decodeField(field, index),
+    );
+    // Гость не считает партию, поэтому накопитель у него всегда нулевой, а
+    // вместе с ним и сглаживание. Двигаем его вручную, чтобы монстры между
+    // снимками ехали плавно, а не прыгали десять раз в секунду.
+    this.accumulator = 0;
+    this.lastSnapshotAt = performance.now();
 
     const wasOver = this.state.over;
     this.state.over = snapshot.over;
@@ -214,9 +260,17 @@ export class GameSession {
     this.pendingCommands.push(command);
   }
 
-  /** Команда, пришедшая от гостя. Только хост имеет право её применить. */
-  enqueueRemote(command: Command): void {
+  /**
+   * Команда, пришедшая от гостя.
+   *
+   * Хост обязан проверить, к какому полю она относится: иначе второй игрок
+   * может строить, продавать и качать башни прямо на поле хоста, а в версусе
+   * ещё и слать монстров самому себе. Поле определяется отправителем, а не
+   * содержимым команды.
+   */
+  enqueueRemote(command: Command, fromField: number): void {
     if (this.role !== "host") return;
+    if (command.field !== fromField) return;
     this.pendingCommands.push(command);
   }
 
@@ -225,6 +279,7 @@ export class GameSession {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     this.minimapCanvas = canvas;
+    this.minimapCtx = ctx;
     this.minimapRenderer = new FieldRenderer(ctx);
     this.resize();
   }
@@ -278,7 +333,7 @@ export class GameSession {
   ): void {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = canvasScale();
     const width = Math.round(rect.width * dpr);
     const height = Math.round(rect.height * dpr);
     if (width === canvas.width && height === canvas.height) return;
@@ -305,6 +360,15 @@ export class GameSession {
       if (steps === MAX_CATCHUP_STEPS) this.accumulator = 0;
     }
 
+    // У гостя время между снимками играет роль накопителя: снимки приходят
+    // раз в три тика, и без этого движение выглядело бы рывками.
+    if (this.role === "guest" && this.lastSnapshotAt > 0) {
+      this.accumulator = Math.min(
+        STEP_MS * SNAPSHOT_EVERY_TICKS,
+        now - this.lastSnapshotAt,
+      );
+    }
+
     this.effects.update(dt / 1000);
     this.syncCanvasSize();
     this.render();
@@ -323,6 +387,7 @@ export class GameSession {
       if (field.owner === this.playerField) {
         this.effects.ingest(field.events);
       }
+      void field;
       // Звучит только своё поле: в версусе иначе получается каша из
       // выстрелов двух обороны сразу.
       this.playSounds(field.events, field.owner === this.ownField);
@@ -337,6 +402,9 @@ export class GameSession {
       if (this.state.winner === this.ownField) sound.victory();
       else sound.defeat();
       if (this.role === "host") {
+        // Сначала последнее состояние, потом сообщение о конце: иначе гость
+        // остаётся с предпоследним снимком и не видит, чем всё кончилось.
+        this.net?.client.sendSnapshot(encodeSnapshot(this.state));
         this.net?.client.send({
           t: "over",
           winner: this.state.winner,
@@ -377,7 +445,7 @@ export class GameSession {
   }
 
   private render(): void {
-    const ctx = this.canvas.getContext("2d")!;
+    const ctx = this.ctx;
     ctx.fillStyle = "#15121f";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -393,7 +461,7 @@ export class GameSession {
       hoverCell: this.hoverCell,
       selectedTowerId: this.selectedTowerId,
       previewRange,
-      alpha: Math.min(1, this.accumulator / STEP_MS),
+      alpha: this.smoothing(),
     });
 
     ctx.save();
@@ -413,9 +481,13 @@ export class GameSession {
     const renderer = this.minimapRenderer;
     if (!canvas || !renderer) return;
 
+    const now = this.lastFrame;
+    if (now - this.minimapDrawnAt < MINIMAP_INTERVAL_MS) return;
+    this.minimapDrawnAt = now;
+
     const index = this.minimapField;
     const field = index >= 0 ? this.state.fields[index] : undefined;
-    const ctx = canvas.getContext("2d");
+    const ctx = this.minimapCtx;
     if (!ctx) return;
 
     ctx.fillStyle = "#15121f";
@@ -426,8 +498,15 @@ export class GameSession {
       hoverCell: null,
       selectedTowerId: null,
       previewRange: null,
-      alpha: Math.min(1, this.accumulator / STEP_MS),
+      alpha: this.smoothing(),
     });
+  }
+
+  /** Доля пути между последними двумя состояниями, 0..1. */
+  private smoothing(): number {
+    const span =
+      this.role === "guest" ? STEP_MS * SNAPSHOT_EVERY_TICKS : STEP_MS;
+    return Math.min(1, this.accumulator / span);
   }
 
   // ── Ввод ──────────────────────────────────────────────────────────────────
@@ -435,7 +514,7 @@ export class GameSession {
   /** Клетка под экранной точкой или null, если мимо поля. */
   cellAt(screenX: number, screenY: number): number | null {
     const rect = this.canvas.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = canvasScale();
     const point = FieldRenderer.toField(
       this.view,
       (screenX - rect.left) * dpr,

@@ -4,7 +4,9 @@ import { AutoPlayer, getStrategy } from "../src/ai/strategies";
 import {
   CREEPS_PER_WAVE,
   CREEP_BASE_SPEED,
+  FUSION_COST_SHARE,
   LENGTH,
+  SEND,
   SPAWN_INTERVAL,
   TICK_RATE,
   WAVE_INTERVAL,
@@ -12,7 +14,7 @@ import {
 } from "../src/core/balance";
 import { MAPS, getMap } from "../src/core/map";
 import { runGame, summarize } from "../src/core/runner";
-import { applyCommand, createGame, step } from "../src/core/sim";
+import { applyCommand, createGame, sendCost, step } from "../src/core/sim";
 import type { RunResult } from "../src/core/runner";
 
 const baseOptions = {
@@ -377,5 +379,118 @@ describe("темп волн", () => {
     expect(quick).toBeLessThan(16);
     expect(classic).toBeGreaterThan(16);
     expect(classic).toBeLessThan(32);
+  });
+});
+
+describe("досрочный призыв волны", () => {
+  it("срабатывает один раз на волну, а не каждый тик", () => {
+    // Команда обнуляла таймер, обработка волн тут же ставила его заново, и
+    // следующий тик снова принимал призыв: за сто секунд набегало под тысячу
+    // выплат и лавина волн одновременно.
+    const state = createGame({ ...baseOptions, length: "classic" });
+    let accepted = 0;
+    for (let i = 0; i < 3000 && !state.over; i++) {
+      if (applyCommand(state, { t: "rush", field: 0 })) accepted++;
+      step(state);
+    }
+    const field = state.fields[0]!;
+    expect(accepted).toBeLessThanOrEqual(field.waveIndex);
+  });
+
+  it("не даёт золота после последней волны", () => {
+    const state = createGame({ ...baseOptions, length: "quick" });
+    const field = state.fields[0]!;
+    const total = LENGTH.quick.totalWaves!;
+
+    // Досматриваем партию до конца расписания волн.
+    for (let i = 0; i < 40_000 && field.waveIndex < total; i++) step(state);
+
+    const goldBefore = field.gold;
+    for (let i = 0; i < 200; i++) applyCommand(state, { t: "rush", field: 0 });
+    expect(field.gold).toBe(goldBefore);
+  });
+
+  it("спам призывов не выигрывает партию", () => {
+    // Раш — обмен времени на риск, а не способ печатать золото.
+    const results = [];
+    for (let i = 0; i < 12; i++) {
+      const mapId = MAPS[i % MAPS.length]!.id;
+      const bot = new AutoPlayer(getStrategy("rusher"), 0, 4242 + i, mapId);
+      results.push(
+        runGame({
+          mode: "solo",
+          difficulty: "hard",
+          length: "classic",
+          mapId,
+          seed: 500 + i * 131,
+          controller: (state) => bot.update(state),
+        }),
+      );
+    }
+    expect(summarize(results).winRate).toBe(0);
+  });
+});
+
+describe("цены после правок", () => {
+  it("отправка дорожает по своему типу, а не по общему счёту", () => {
+    const state = createGame({ ...baseOptions, mode: "versus" });
+    const field = state.fields[0]!;
+    field.gold = 100_000;
+
+    const flyingBefore = sendCost(field, "flying");
+    for (let i = 0; i < 5; i++) {
+      applyCommand(state, { t: "send", field: 0, kind: "normal" });
+    }
+
+    // Пять отправок обычных не должны влиять на цену летающих.
+    expect(sendCost(field, "flying")).toBe(flyingBefore);
+    expect(sendCost(field, "normal")).toBeGreaterThan(
+      SEND.normal!.cost,
+    );
+  });
+
+  it("слияние считается от обеих башен, а не только от жертвы", () => {
+    const state = createGame({ ...baseOptions, difficulty: "easy" });
+    const field = state.fields[0]!;
+    field.gold = 100_000;
+
+    const map = getMap(baseOptions.mapId);
+    let pair: [number, number] | null = null;
+    for (const a of map.buildCells) {
+      for (const b of map.buildCells) {
+        if (a === b) continue;
+        if (
+          Math.abs((a % 15) - (b % 15)) <= 1 &&
+          Math.abs(Math.floor(a / 15) - Math.floor(b / 15)) <= 1
+        ) {
+          pair = [a, b];
+          break;
+        }
+      }
+      if (pair) break;
+    }
+    if (!pair) throw new Error("на карте нет соседних площадок");
+
+    applyCommand(state, { t: "build", field: 0, cell: pair[0], element: "fire" });
+    applyCommand(state, { t: "build", field: 0, cell: pair[1], element: "ice" });
+    const [main, other] = field.towers;
+
+    // Дорогая башня плюс дешёвая: цена должна учитывать вложенное в обе.
+    for (let i = 0; i < 3; i++) {
+      applyCommand(state, { t: "upgrade", field: 0, tower: main!.id });
+    }
+
+    const goldBefore = field.gold;
+    applyCommand(state, {
+      t: "fuse",
+      field: 0,
+      tower: main!.id,
+      with: other!.id,
+    });
+    const paid = goldBefore - field.gold;
+
+    expect(paid).toBeGreaterThan(
+      Math.round(other!.invested * FUSION_COST_SHARE),
+    );
   });
 });

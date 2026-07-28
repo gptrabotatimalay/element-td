@@ -284,6 +284,25 @@ const fusionist: Strategy = {
   },
 };
 
+/**
+ * Жмёт «волну раньше» при каждой возможности и строит по остаточному принципу.
+ *
+ * Проверяет, что досрочный призыв остаётся обменом времени на риск, а не
+ * способом печатать золото: когда-то он срабатывал каждый тик и за сто секунд
+ * приносил больше, чем вся партия честной игры.
+ */
+const rusher: Strategy = {
+  id: "rusher",
+  label: "Спам досрочных волн",
+  thinkInterval: 1,
+  decide(ctx) {
+    if (ctx.field.waveTimer > 0) {
+      return [{ t: "rush", field: ctx.fieldIndex }];
+    }
+    return balanced.decide(ctx);
+  },
+};
+
 /** Случайная игра — нижняя граница. Хардкор она проходить не должна никогда. */
 const chaotic: Strategy = {
   id: "chaotic",
@@ -331,6 +350,7 @@ const aggressive: Strategy = {
 export const STRATEGIES: Strategy[] = [
   balanced,
   fusionist,
+  rusher,
   aggressive,
   spreadCheap,
   greedySingle,

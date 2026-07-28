@@ -67,7 +67,30 @@ export class GameSession {
 
   private renderer: FieldRenderer;
   private effects = new EffectLayer();
-  private view: ViewTransform = { scale: 1, offsetX: 0, offsetY: 0 };
+  private view: ViewTransform = {
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    rotated: false,
+  };
+
+  /**
+   * Второй холст — поле соперника целиком, в уменьшенном виде.
+   *
+   * Раньше на чужое поле можно было только переключиться, потеряв из виду
+   * своё. В версусе это неудобно: решение отправить монстров принимается
+   * ровно тогда, когда видно и свою оборону, и чужую. Поэтому поле соперника
+   * теперь всегда на экране рядом, а переключение осталось лишь для того,
+   * чтобы рассмотреть его крупно.
+   */
+  private minimapCanvas: HTMLCanvasElement | null = null;
+  private minimapRenderer: FieldRenderer | null = null;
+  private minimapView: ViewTransform = {
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    rotated: false,
+  };
 
   private accumulator = 0;
   private lastFrame = 0;
@@ -197,13 +220,40 @@ export class GameSession {
     this.pendingCommands.push(command);
   }
 
+  /** Подключает холст под поле соперника. В соло не вызывается. */
+  attachMinimap(canvas: HTMLCanvasElement): void {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    this.minimapCanvas = canvas;
+    this.minimapRenderer = new FieldRenderer(ctx);
+    this.resize();
+  }
+
+  /** Поле, которое показывается в мини-карте: всегда не то, что в основном. */
+  get minimapField(): number {
+    return this.state.fields.length > 1 ? 1 - this.playerField : -1;
+  }
+
   resize(): void {
-    const rect = this.canvas.getBoundingClientRect();
+    this.fitCanvas(this.canvas, (view) => (this.view = view));
+    if (this.minimapCanvas) {
+      this.fitCanvas(
+        this.minimapCanvas,
+        (view) => (this.minimapView = view),
+      );
+    }
+  }
+
+  private fitCanvas(
+    canvas: HTMLCanvasElement,
+    assign: (view: ViewTransform) => void,
+  ): void {
+    const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = Math.round(rect.width * dpr);
-    this.canvas.height = Math.round(rect.height * dpr);
-    this.view = FieldRenderer.fit(this.canvas.width, this.canvas.height);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    assign(FieldRenderer.fit(canvas.width, canvas.height));
   }
 
   /**
@@ -216,15 +266,25 @@ export class GameSession {
    * игрок целился в площадку и промахивался мимо неё на десятки пикселей.
    */
   private syncCanvasSize(): void {
-    const rect = this.canvas.getBoundingClientRect();
+    this.syncOne(this.canvas, (view) => (this.view = view));
+    if (this.minimapCanvas) {
+      this.syncOne(this.minimapCanvas, (view) => (this.minimapView = view));
+    }
+  }
+
+  private syncOne(
+    canvas: HTMLCanvasElement,
+    assign: (view: ViewTransform) => void,
+  ): void {
+    const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.round(rect.width * dpr);
     const height = Math.round(rect.height * dpr);
-    if (width === this.canvas.width && height === this.canvas.height) return;
-    this.canvas.width = width;
-    this.canvas.height = height;
-    this.view = FieldRenderer.fit(width, height);
+    if (width === canvas.width && height === canvas.height) return;
+    canvas.width = width;
+    canvas.height = height;
+    assign(FieldRenderer.fit(width, height));
   }
 
   // ── Цикл ──────────────────────────────────────────────────────────────────
@@ -337,10 +397,37 @@ export class GameSession {
     });
 
     ctx.save();
-    ctx.translate(this.view.offsetX, this.view.offsetY);
-    ctx.scale(this.view.scale, this.view.scale);
+    FieldRenderer.applyTransform(ctx, this.view);
     this.effects.draw(ctx);
     ctx.restore();
+
+    this.renderMinimap();
+  }
+
+  /**
+   * Поле соперника. Рисуется тем же кодом, что и основное, но без подсветок
+   * и эффектов: это обзор чужой обороны, а не вторая игра.
+   */
+  private renderMinimap(): void {
+    const canvas = this.minimapCanvas;
+    const renderer = this.minimapRenderer;
+    if (!canvas || !renderer) return;
+
+    const index = this.minimapField;
+    const field = index >= 0 ? this.state.fields[index] : undefined;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.fillStyle = "#15121f";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!field) return;
+
+    renderer.draw(field, this.map, this.minimapView, this.state.tick, {
+      hoverCell: null,
+      selectedTowerId: null,
+      previewRange: null,
+      alpha: Math.min(1, this.accumulator / STEP_MS),
+    });
   }
 
   // ── Ввод ──────────────────────────────────────────────────────────────────

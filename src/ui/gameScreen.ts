@@ -1,9 +1,13 @@
 /**
- * Игровой экран: панель сверху, поле в середине, управление снизу.
+ * Игровой экран: поле слева, всё управление — в боковой панели.
  *
- * Порядок не случаен. На телефоне палец закрывает низ экрана, поэтому вся
- * важная информация (жизни, золото, номер волны) вынесена наверх, а всё, что
- * нажимают, — вниз, в зону большого пальца.
+ * Поле занимает свою область целиком и никогда не меняет размер. Раньше
+ * панель выбранной башни появлялась в общем потоке, поле из-за этого
+ * сжималось, и карта прыгала при каждом нажатии. Теперь всё, что появляется
+ * и исчезает, живёт в отдельной колонке со своей прокруткой.
+ *
+ * На узком экране колонка уезжает вниз, но правило то же: поле получает
+ * фиксированную долю высоты и не отдаёт её панели ни при каких условиях.
  */
 
 import { sound } from "../audio/sound";
@@ -11,11 +15,13 @@ import {
   CREEP_KIND,
   DIFFICULTY,
   ELEMENT,
+  ENDLESS_BOSS_EVERY,
+  FUSION_COST_SHARE,
   LENGTH,
+  WAVE_PATTERN,
   SEND,
   TICK_RATE,
   TOWER_LEVEL_MAX,
-  FUSION_COST_SHARE,
   findFusion,
   healCost,
   towerCost,
@@ -55,6 +61,10 @@ const TARGET_LABELS: { mode: TargetMode; label: string; hint: string }[] = [
 export interface GameScreenHandles {
   root: HTMLElement;
   canvas: HTMLCanvasElement;
+  /** Холст поля соперника. Подключается сессией только в режимах на двоих. */
+  rivalCanvas: HTMLCanvasElement;
+  /** Показать или спрятать блок с полем соперника. */
+  setRivalVisible: (visible: boolean) => void;
   update: (state: GameState) => void;
   destroy: () => void;
 }
@@ -63,10 +73,11 @@ export function createGameScreen(
   session: () => GameSession,
   onExit: () => void,
 ): GameScreenHandles {
+  // ── Поле ──────────────────────────────────────────────────────────────────
   const canvas = el("canvas");
-  const fieldBox = el("div", { class: "field" }, [canvas]);
+  const board = el("div", { class: "board" }, [canvas]);
 
-  // ── Панель сверху ─────────────────────────────────────────────────────────
+  // ── Показатели ────────────────────────────────────────────────────────────
   const livesEl = el("span", { text: "0" });
   const goldEl = el("span", { text: "0" });
   const waveEl = el("span", { text: "0" });
@@ -94,27 +105,58 @@ export function createGameScreen(
   });
 
   const hud = el("div", { class: "hud" }, [
-    el("div", { class: "hud__stat hud__lives" }, [
-      el("span", { text: "♥" }),
-      livesEl,
+    el("div", { class: "hud__stats" }, [
+      el("div", { class: "hud__stat hud__lives" }, [
+        el("span", { text: "♥" }),
+        livesEl,
+      ]),
+      el("div", { class: "hud__stat hud__gold" }, [
+        el("span", { text: "◈" }),
+        goldEl,
+      ]),
+      el("div", { class: "hud__stat hud__wave" }, [
+        el("span", { text: "⚑" }),
+        waveEl,
+      ]),
     ]),
-    el("div", { class: "hud__stat hud__gold" }, [
-      el("span", { text: "◈" }),
-      goldEl,
+    el("div", { class: "hud__controls" }, [
+      pauseBtn,
+      speedBtn,
+      soundBtn,
+      exitBtn,
     ]),
-    el("div", { class: "hud__stat hud__wave" }, [
-      el("span", { text: "⚑" }),
-      waveEl,
-    ]),
-    el("div", { class: "hud__spacer" }),
-    pauseBtn,
-    speedBtn,
-    soundBtn,
-    exitBtn,
     nextEl,
   ]);
 
-  // ── Панель выбора башен ───────────────────────────────────────────────────
+  // ── Поле соперника ────────────────────────────────────────────────────────
+  //
+  // Всегда на виду, а не по переключению: решение отправить монстров
+  // принимается ровно тогда, когда видно и свою оборону, и чужую.
+  const rivalCanvas = el("canvas", {
+    class: "rival__canvas",
+    title: "Нажми, чтобы посмотреть это поле крупно",
+  }) as HTMLCanvasElement;
+  const rivalLives = el("b", { text: "—" });
+  const rivalWave = el("b", { text: "—" });
+  const rivalTitle = el("span", { text: "Поле соперника" });
+  const rivalBlock = el("div", { class: "rival" }, [
+    rivalCanvas,
+    el("div", { class: "rival__stats" }, [
+      rivalTitle,
+      el("span", {}, ["♥ ", rivalLives]),
+      el("span", {}, ["⚑ ", rivalWave]),
+    ]),
+  ]);
+  rivalBlock.style.display = "none";
+
+  // ── Панель выбранной башни ────────────────────────────────────────────────
+  //
+  // Пока башня не выбрана, здесь висит расписание ближайших волн. Место под
+  // панель всё равно зарезервировано, чтобы кнопки не прыгали, — так пусть
+  // оно показывает то, ради чего в игру и смотрят: что идёт дальше.
+  const inspectBox = el("div", { class: "side__inspect" });
+
+  // ── Кнопки башен ──────────────────────────────────────────────────────────
   const towerButtons = new Map<ElementId, HTMLButtonElement>();
   const towersRow = el("div", { class: "towers" });
 
@@ -154,29 +196,8 @@ export function createGameScreen(
     towersRow.append(button);
   }
 
-  // ── Действия ──────────────────────────────────────────────────────────────
-  const rushBtn = el("button", {
-    class: "btn",
-    text: "Волна раньше",
-  }) as HTMLButtonElement;
-  const healBtn = el("button", {
-    class: "btn",
-    text: "Купить жизнь",
-  }) as HTMLButtonElement;
-  const viewBtn = el("button", {
-    class: "btn",
-    text: "Поле соперника",
-  }) as HTMLButtonElement;
-  const actions = el("div", { class: "actions" }, [rushBtn, healBtn]);
-
-  /**
-   * Отправка монстров сопернику — сердце версуса.
-   *
-   * Каждая отправка стоит золота сейчас и навсегда повышает свой доход,
-   * поэтому ранняя агрессия окупается, но оголяет собственную оборону.
-   * Панель показывается только в версусе: в соло и коопе слать некому.
-   */
-  const sendRow = el("div", { class: "towers" });
+  // ── Отправка монстров сопернику ───────────────────────────────────────────
+  const sendRow = el("div", { class: "sends" });
   const sendButtons = new Map<CreepKind, HTMLButtonElement>();
   const SENDABLE = Object.keys(SEND) as CreepKind[];
 
@@ -185,7 +206,7 @@ export function createGameScreen(
     const button = el(
       "button",
       {
-        class: "tower-btn",
+        class: "send-btn",
         title: `${CREEP_KIND[kind].label} сопернику. Доход +${cfg.income.toFixed(1)} за волну`,
       },
       [
@@ -214,39 +235,43 @@ export function createGameScreen(
     sendRow.append(button);
   }
 
-  /** В версусе можно подсмотреть, как дела у соперника. */
-  let watchingOpponent = false;
-  viewBtn.addEventListener("click", () => {
-    const s = session();
-    if (s.state.fields.length < 2) return;
-    watchingOpponent = !watchingOpponent;
-    s.playerField = watchingOpponent ? 1 - s.ownField : s.ownField;
-    s.selectedTowerId = null;
-    s.placement = { kind: "none" };
-    viewBtn.textContent = watchingOpponent ? "Своё поле" : "Поле соперника";
-    viewBtn.setAttribute("aria-pressed", String(watchingOpponent));
-    renderInspect();
-    refreshTowerButtons();
-  });
+  const sendBlock = el("div", { class: "side__block" }, [
+    el("label", { class: "menu__label", text: "Отправить сопернику" }),
+    sendRow,
+  ]);
+  sendBlock.style.display = "none";
 
-  const inspectBox = el("div");
-  const sendBox = el("div");
-  const dock = el("div", { class: "dock" }, [
+  // ── Действия ──────────────────────────────────────────────────────────────
+  const rushBtn = el("button", {
+    class: "btn",
+    text: "Волна раньше",
+  }) as HTMLButtonElement;
+  const healBtn = el("button", {
+    class: "btn",
+    text: "Купить жизнь",
+  }) as HTMLButtonElement;
+  const actions = el("div", { class: "actions" }, [rushBtn, healBtn]);
+
+  const side = el("aside", { class: "side" }, [
+    hud,
+    rivalBlock,
     inspectBox,
-    sendBox,
-    towersRow,
+    el("div", { class: "side__block" }, [towersRow]),
+    sendBlock,
     actions,
   ]);
-  const rotateHint = el("div", {
-    class: "rotate-hint",
-    text: "Поверни телефон — поле станет вдвое крупнее",
-  });
-  const root = el("div", { class: "game" }, [hud, fieldBox, rotateHint, dock]);
+
+  const root = el("div", { class: "game" }, [board, side]);
 
   // ── Обработчики ───────────────────────────────────────────────────────────
 
   rushBtn.addEventListener("click", () => {
     const s = session();
+    const field = s.state.fields[s.ownField];
+    if (!field || field.waveTimer <= 0) {
+      sound.denied();
+      return;
+    }
     s.enqueue({ t: "rush", field: s.ownField });
     toast("Волна вызвана досрочно");
   });
@@ -263,7 +288,23 @@ export function createGameScreen(
     }
     s.enqueue({ t: "heal", field: s.ownField });
     sound.heal();
+    lastInspect = "";
   });
+
+  /** Меняет местами большое поле и поле соперника. */
+  function swapFields(): void {
+    const s = session();
+    if (s.state.fields.length < 2) return;
+    s.playerField = s.playerField === s.ownField ? 1 - s.ownField : s.ownField;
+    s.selectedTowerId = null;
+    s.placement = { kind: "none" };
+    lastInspect = "";
+    updateRivalCaption();
+    renderInspect();
+    refreshTowerButtons();
+  }
+
+  rivalCanvas.addEventListener("click", swapFields);
 
   pauseBtn.addEventListener("click", () => togglePause());
   speedBtn.addEventListener("click", () => cycleSpeed());
@@ -288,7 +329,6 @@ export function createGameScreen(
     speedBtn.textContent = `${s.speed}×`;
   }
 
-  // Поле: клик мышью и касание пальцем.
   canvas.addEventListener("pointermove", (event) => {
     if (event.pointerType === "mouse")
       session().setHover(event.clientX, event.clientY);
@@ -300,6 +340,9 @@ export function createGameScreen(
     // Палец не наводит курсор — подсветку выставляем прямо в момент касания.
     if (event.pointerType !== "mouse") s.setHover(event.clientX, event.clientY);
     s.handleTap(event.clientX, event.clientY);
+    // Касанием подсветку сразу и снимаем, иначе рамка залипает на клетке.
+    if (event.pointerType !== "mouse") s.clearHover();
+    lastInspect = "";
     refreshTowerButtons();
     renderInspect();
   });
@@ -315,9 +358,14 @@ export function createGameScreen(
       case "f":
         cycleSpeed();
         break;
+      case "tab":
+        event.preventDefault();
+        swapFields();
+        break;
       case "escape":
         s.placement = { kind: "none" };
         s.selectedTowerId = null;
+        lastInspect = "";
         refreshTowerButtons();
         renderInspect();
         break;
@@ -343,13 +391,14 @@ export function createGameScreen(
   window.addEventListener("resize", onResize);
   window.addEventListener("orientationchange", onResize);
 
-  // ── Отрисовка интерфейса ──────────────────────────────────────────────────
+  // ── Отрисовка панелей ─────────────────────────────────────────────────────
 
   function refreshTowerButtons(): void {
     const s = session();
     const field = s.state.fields[s.ownField];
     if (!field) return;
     const watching = s.playerField !== s.ownField;
+
     for (const [element, button] of towerButtons) {
       const chosen =
         s.placement.kind === "build" && s.placement.element === element;
@@ -357,6 +406,7 @@ export function createGameScreen(
       // На чужом поле строить нельзя — гасим панель, чтобы это было видно.
       button.disabled = watching || field.gold < ELEMENT[element].baseCost;
     }
+
     for (const [kind, button] of sendButtons) {
       const cost = sendCost(field, kind);
       button.disabled = cost === null || field.gold < cost;
@@ -365,35 +415,108 @@ export function createGameScreen(
     }
   }
 
+  function updateRivalCaption(): void {
+    const s = session();
+    rivalTitle.textContent =
+      s.playerField === s.ownField ? "Поле соперника" : "Твоё поле";
+  }
+
   function renderInspect(): void {
     const s = session();
     const field = s.state.fields[s.playerField];
     clear(inspectBox);
-    if (!field || s.selectedTowerId === null) return;
+    if (!field) return;
 
-    const tower = field.towers.find((t) => t.id === s.selectedTowerId);
-    if (!tower) {
+    const tower =
+      s.selectedTowerId === null
+        ? undefined
+        : field.towers.find((t) => t.id === s.selectedTowerId);
+
+    if (s.selectedTowerId !== null && !tower) {
+      // Башню продали или она принадлежит другому полю.
       s.selectedTowerId = null;
-      return;
     }
 
-    inspectBox.append(buildInspectPanel(s, tower));
+    inspectBox.append(tower ? buildInspectPanel(s, tower) : buildSchedule(s));
+  }
+
+  /**
+   * Расписание ближайших волн.
+   *
+   * Тип волны надо знать заранее: против летающих нужны башни, достающие до
+   * воздуха, против роя — урон по площади, и строить это в момент, когда волна
+   * уже вышла, поздно.
+   */
+  function buildSchedule(s: GameSession): HTMLElement {
+    const field = s.state.fields[s.playerField];
+    const panel = el("div", { class: "schedule" }, [
+      el("div", { class: "menu__label", text: "Ближайшие волны" }),
+    ]);
+    if (!field) return panel;
+
+    const lengthCfg = LENGTH[s.state.length];
+    for (let offset = 0; offset < 6; offset++) {
+      const index = field.waveIndex + offset;
+      const number = index + 1;
+      if (lengthCfg.totalWaves !== null && number > lengthCfg.totalWaves) break;
+
+      const boss =
+        lengthCfg.totalWaves === null
+          ? number % ENDLESS_BOSS_EVERY === 0
+          : lengthCfg.bossWaves.includes(number);
+      const kind: CreepKind = boss
+        ? "boss"
+        : (WAVE_PATTERN[index % WAVE_PATTERN.length] ?? "normal");
+
+      const row = el("div", { class: "schedule__row" }, [
+        el("span", { class: "schedule__num", text: `${number}` }),
+        el("span", { class: "schedule__kind", text: CREEP_KIND[kind].label }),
+        el("span", { class: "schedule__hint", text: waveHint(kind) }),
+      ]);
+      if (offset === 0) row.classList.add("schedule__row--next");
+      if (boss) row.classList.add("schedule__row--boss");
+      panel.append(row);
+    }
+
+    return panel;
+  }
+
+  /** Чем волна опасна — одной строкой, без чтения справки. */
+  function waveHint(kind: CreepKind): string {
+    switch (kind) {
+      case "fast":
+        return "нужен лёд";
+      case "flying":
+        return "земля не достаёт";
+      case "swarm":
+        return "нужен урон по площади";
+      case "armored":
+        return "держат удар";
+      case "boss":
+        return "яд и много урона";
+      default:
+        return "";
+    }
   }
 
   function buildInspectPanel(s: GameSession, tower: Tower): HTMLElement {
     const cfg = ELEMENT[tower.element];
-    const field = s.state.fields[s.playerField]!;
-    const aura = field.auraCache.get(tower.id);
+    const shownField = s.state.fields[s.playerField]!;
+    const ownField = s.state.fields[s.ownField]!;
+    const aura = shownField.auraCache.get(tower.id);
     const maxed = tower.level >= TOWER_LEVEL_MAX;
     const nextCost = maxed ? 0 : towerCost(tower.element, tower.level + 1);
     const refund = Math.floor(
       tower.invested * DIFFICULTY[s.state.difficulty].sellRefund,
     );
 
-    const head = el("div", { class: "inspect__head" }, [
-      el("span", {
-        text: `${towerName(tower.element, tower.fused)} · уровень ${tower.level}`,
-      }),
+    const panel = el("div", { class: "inspect" }, [
+      el("div", { class: "inspect__head" }, [
+        el("span", {
+          text: `${towerName(tower.element, tower.fused)} · уровень ${tower.level}`,
+        }),
+      ]),
+      el("div", { class: "inspect__desc", text: cfg.description }),
     ]);
 
     const stats = el("div", { class: "inspect__stats" }, [
@@ -416,8 +539,6 @@ export function createGameScreen(
         el("b", { text: formatNumber(tower.damageDealt) }),
       ]),
     ]);
-
-    // Показываем усиление аурой только когда оно есть — иначе шум.
     if (aura && aura.damageMult > 1) {
       stats.append(
         el("span", {}, [
@@ -426,69 +547,9 @@ export function createGameScreen(
         ]),
       );
     }
+    panel.append(stats);
 
-    const upgradeBtn = el("button", {
-      class: "btn btn--primary",
-      text: maxed ? "Максимум" : `Улучшить · ${nextCost}`,
-    }) as HTMLButtonElement;
-    upgradeBtn.disabled = maxed || field.gold < nextCost;
-    upgradeBtn.addEventListener("click", () => {
-      const cost = towerCost(tower.element, tower.level + 1);
-      if (maxed || field.gold < cost) {
-        sound.denied();
-        toast("Не хватает золота");
-        return;
-      }
-      s.enqueue({ t: "upgrade", field: s.ownField, tower: tower.id });
-      sound.upgrade();
-      // Кнопку гасим сразу: команда применится на следующем шаге симуляции,
-      // и без этого можно успеть нажать её несколько раз подряд.
-      upgradeBtn.disabled = true;
-      lastInspect = "";
-    });
-
-    const sellBtn = el("button", {
-      class: "btn btn--danger",
-      text: `Продать · ${refund}`,
-    }) as HTMLButtonElement;
-    sellBtn.addEventListener("click", () => {
-      s.enqueue({ t: "sell", field: s.ownField, tower: tower.id });
-      s.selectedTowerId = null;
-      sound.sell();
-      lastInspect = "";
-      renderInspect();
-    });
-
-    const targeting = el("div", { class: "targeting" });
-    for (const option of TARGET_LABELS) {
-      const button = el("button", {
-        text: option.label,
-        title: option.hint,
-        "aria-pressed": String(tower.targetMode === option.mode),
-      });
-      button.addEventListener("click", () => {
-        s.enqueue({
-          t: "target",
-          field: s.ownField,
-          tower: tower.id,
-          mode: option.mode,
-        });
-        // Команда применится на следующем тике, а кнопку переключаем сразу.
-        tower.targetMode = option.mode;
-        lastInspect = "";
-        renderInspect();
-      });
-      targeting.append(button);
-    }
-
-    const panel = el("div", { class: "inspect" }, [
-      head,
-      el("div", { class: "inspect__desc", text: cfg.description }),
-      stats,
-    ]);
-
-    // На чужом поле башню видно, но трогать её нельзя — незачем показывать
-    // кнопки, которые всё равно отклонит симуляция.
+    // На чужом поле башню видно, но трогать её нельзя.
     if (s.playerField !== s.ownField) {
       panel.append(
         el("div", { class: "inspect__desc", text: "Башня соперника" }),
@@ -496,14 +557,37 @@ export function createGameScreen(
       return panel;
     }
 
-    if (tower.element !== "light") panel.append(targeting);
+    if (tower.element !== "light") {
+      const targeting = el("div", { class: "targeting" });
+      for (const option of TARGET_LABELS) {
+        const button = el("button", {
+          text: option.label,
+          title: option.hint,
+          "aria-pressed": String(tower.targetMode === option.mode),
+        });
+        button.addEventListener("click", () => {
+          s.enqueue({
+            t: "target",
+            field: s.ownField,
+            tower: tower.id,
+            mode: option.mode,
+          });
+          // Команда применится на следующем тике, а кнопку переключаем сразу.
+          tower.targetMode = option.mode;
+          lastInspect = "";
+          renderInspect();
+        });
+        targeting.append(button);
+      }
+      panel.append(targeting);
+    }
 
     const fusions = availableFusions(s, tower);
     if (fusions.length > 0) {
       panel.append(
         el("div", {
           class: "inspect__desc",
-          text: "Слить с соседней башней — эффекты обеих стихий на одной цели, освободится площадка:",
+          text: "Слить с соседней: эффекты обеих стихий на одной цели, площадка освободится",
         }),
       );
       const row = el("div", { class: "inspect__row" });
@@ -513,7 +597,7 @@ export function createGameScreen(
           text: `${option.recipe.label} · ${option.cost}`,
           title: option.recipe.description,
         }) as HTMLButtonElement;
-        button.disabled = field.gold < option.cost;
+        button.disabled = ownField.gold < option.cost;
         button.addEventListener("click", () => {
           s.enqueue({
             t: "fuse",
@@ -532,53 +616,54 @@ export function createGameScreen(
       panel.append(row);
     }
 
+    const upgradeBtn = el("button", {
+      class: "btn btn--primary",
+      text: maxed ? "Максимум" : `Улучшить · ${nextCost}`,
+    }) as HTMLButtonElement;
+    upgradeBtn.disabled = maxed || ownField.gold < nextCost;
+    upgradeBtn.addEventListener("click", () => {
+      if (maxed || ownField.gold < nextCost) {
+        sound.denied();
+        toast("Не хватает золота");
+        return;
+      }
+      s.enqueue({ t: "upgrade", field: s.ownField, tower: tower.id });
+      sound.upgrade();
+      // Команда применится на следующем шаге симуляции — гасим кнопку сразу,
+      // иначе можно успеть нажать её несколько раз подряд.
+      upgradeBtn.disabled = true;
+      lastInspect = "";
+    });
+
+    const sellBtn = el("button", {
+      class: "btn btn--danger",
+      text: `Продать · ${refund}`,
+    }) as HTMLButtonElement;
+    sellBtn.addEventListener("click", () => {
+      s.enqueue({ t: "sell", field: s.ownField, tower: tower.id });
+      s.selectedTowerId = null;
+      sound.sell();
+      lastInspect = "";
+      renderInspect();
+    });
+
     panel.append(el("div", { class: "inspect__row" }, [upgradeBtn, sellBtn]));
     return panel;
   }
 
-  let lastWave = -1;
-  let lastGold = -1;
-  let lastInspect = "";
-
-  /**
-   * Слепок того, что показывает панель выбранной башни.
-   *
-   * Панель перерисовывается не по таймеру и не на каждое изменение золота
-   * (иначе она мигала бы весь бой), а когда меняется что-то из показанного:
-   * уровень, слияние, приоритет цели, доступность кнопок. Это важно потому,
-   * что команда игрока применяется на следующем шаге симуляции — без такой
-   * сверки нажатие «Улучшить» выглядело так, будто ничего не произошло.
-   */
-  function inspectSignature(s: GameSession): string {
-    if (s.selectedTowerId === null) return "";
-    const field = s.state.fields[s.ownField];
-    const tower = field?.towers.find((t) => t.id === s.selectedTowerId);
-    if (!field || !tower) return "нет";
-
-    const nextCost =
-      tower.level >= TOWER_LEVEL_MAX
-        ? 0
-        : towerCost(tower.element, tower.level + 1);
-    return [
-      tower.id,
-      tower.level,
-      tower.fused ?? "-",
-      tower.targetMode,
-      field.gold >= nextCost ? 1 : 0,
-      Math.round(tower.damageDealt / 50),
-      s.playerField,
-    ].join(":");
-  }
-
   /**
    * Соседи, с которыми выбранную башню можно слить.
-   * Показываем только реально доступные пары — заставлять игрока помнить
-   * таблицу из восьми рецептов незачем.
+   * Показываем только доступные пары — заставлять игрока помнить таблицу
+   * из восьми рецептов незачем.
    */
   function availableFusions(
     s: GameSession,
     tower: Tower,
-  ): { neighbour: Tower; recipe: ReturnType<typeof findFusion> & object; cost: number }[] {
+  ): {
+    neighbour: Tower;
+    recipe: NonNullable<ReturnType<typeof findFusion>>;
+    cost: number;
+  }[] {
     if (tower.fused) return [];
     const field = s.state.fields[s.ownField];
     if (!field) return [];
@@ -589,9 +674,8 @@ export function createGameScreen(
 
     for (const other of field.towers) {
       if (other.id === tower.id || other.fused) continue;
-      const dc = Math.abs(cellCol(other.cell) - col);
-      const dr = Math.abs(cellRow(other.cell) - row);
-      if (dc > 1 || dr > 1) continue;
+      if (Math.abs(cellCol(other.cell) - col) > 1) continue;
+      if (Math.abs(cellRow(other.cell) - row) > 1) continue;
       const recipe = findFusion(tower.element, other.element);
       if (!recipe) continue;
       result.push({
@@ -603,54 +687,89 @@ export function createGameScreen(
     return result;
   }
 
+  /**
+   * Слепок того, что показывает панель выбранной башни.
+   *
+   * Панель перерисовывается не на каждое изменение золота (иначе она мигала бы
+   * весь бой), а когда меняется что-то из показанного. Это важно потому, что
+   * команда игрока применяется на следующем шаге симуляции — без такой сверки
+   * нажатие «Улучшить» выглядело так, будто ничего не произошло.
+   */
+  function inspectSignature(s: GameSession): string {
+    const own0 = s.state.fields[s.ownField];
+    if (s.selectedTowerId === null) {
+      // Ничего не выбрано — показывается расписание, оно зависит от волны.
+      return `расписание:${own0?.waveIndex ?? -1}:${s.playerField}`;
+    }
+    const field = s.state.fields[s.playerField];
+    const own = s.state.fields[s.ownField];
+    const tower = field?.towers.find((t) => t.id === s.selectedTowerId);
+    if (!field || !own || !tower) return "нет";
+
+    const nextCost =
+      tower.level >= TOWER_LEVEL_MAX
+        ? 0
+        : towerCost(tower.element, tower.level + 1);
+    return [
+      tower.id,
+      tower.level,
+      tower.fused ?? "-",
+      tower.targetMode,
+      own.gold >= nextCost ? 1 : 0,
+      Math.round(tower.damageDealt / 50),
+      s.playerField,
+      availableFusions(s, tower).length,
+    ].join(":");
+  }
+
+  let lastGold = -1;
+  let lastInspect = "";
   let versusReady = false;
 
   function update(state: GameState): void {
     const s = session();
-    const field = state.fields[s.playerField];
-    if (!field) return;
+    const shown = state.fields[s.playerField];
+    const own = state.fields[s.ownField];
+    if (!shown || !own) return;
 
-    // Панель отправки и переключение поля нужны только в версусе.
-    if (!versusReady && state.mode === "versus" && state.fields.length > 1) {
-      versusReady = true;
-      sendBox.append(
-        el("label", { class: "menu__label", text: "Отправить сопернику" }),
-        sendRow,
-      );
-      actions.append(viewBtn);
-    }
-
-    livesEl.textContent = String(field.lives);
-    goldEl.textContent = formatNumber(field.gold);
+    // Показатели всегда свои: чужие видно на карте соперника отдельно.
+    livesEl.textContent = String(own.lives);
+    goldEl.textContent = formatNumber(own.gold);
 
     const total = LENGTH[state.length].totalWaves;
     waveEl.textContent =
-      total === null ? `${field.waveIndex}` : `${field.waveIndex} / ${total}`;
+      total === null ? `${own.waveIndex}` : `${own.waveIndex} / ${total}`;
 
-    const seconds = Math.ceil(field.waveTimer / TICK_RATE);
-    if (watchingOpponent) {
-      // Смотрим на чужое поле — цифры сверху тоже чужие, это надо сказать.
-      nextEl.innerHTML = "<b>смотрим поле соперника</b> — строить нельзя";
-    } else {
-      nextEl.innerHTML =
-        field.waveTimer > 0
-          ? `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`
-          : "волна идёт";
+    const seconds = Math.ceil(own.waveTimer / TICK_RATE);
+    nextEl.innerHTML =
+      own.waveTimer > 0
+        ? `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`
+        : "волна идёт";
+
+    const cost = healCost(own.stats.healCount);
+    healBtn.textContent = `Жизнь · ${formatNumber(cost)}`;
+    healBtn.disabled = own.gold < cost;
+    rushBtn.disabled = own.waveTimer <= 0;
+
+    // Блоки для игры вдвоём появляются один раз, когда становится ясно,
+    // что полей действительно два.
+    if (!versusReady && state.fields.length > 1) {
+      versusReady = true;
+      rivalBlock.style.display = "";
+      if (state.mode === "versus") sendBlock.style.display = "";
+      updateRivalCaption();
+      session().resize();
     }
 
-    const cost = healCost(field.stats.healCount);
-    healBtn.textContent = `Купить жизнь · ${formatNumber(cost)}`;
-    healBtn.disabled = field.gold < cost;
-    rushBtn.disabled = field.waveTimer <= 0;
+    if (versusReady) {
+      const rival = state.fields[s.minimapField];
+      rivalLives.textContent = rival ? String(rival.lives) : "—";
+      rivalWave.textContent = rival ? String(rival.waveIndex) : "—";
+    }
 
-    // Перерисовываем панели только когда есть повод — иначе теряется
-    // фокус на кнопках и мигает выделение.
-    if (field.gold !== lastGold) {
-      lastGold = field.gold;
+    if (own.gold !== lastGold) {
+      lastGold = own.gold;
       refreshTowerButtons();
-    }
-    if (field.waveIndex !== lastWave) {
-      lastWave = field.waveIndex;
     }
 
     const signature = inspectSignature(s);
@@ -666,5 +785,14 @@ export function createGameScreen(
     window.removeEventListener("orientationchange", onResize);
   }
 
-  return { root, canvas, update, destroy };
+  return {
+    root,
+    canvas,
+    rivalCanvas,
+    setRivalVisible: (visible: boolean) => {
+      rivalBlock.style.display = visible ? "" : "none";
+    },
+    update,
+    destroy,
+  };
 }

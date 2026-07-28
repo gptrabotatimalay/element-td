@@ -95,10 +95,10 @@ test.describe("сетевая игра", () => {
       await host.getByRole("button", { name: "Начать партию" }).click();
 
       // Поле должно появиться у обоих, а не только у того, кто нажал.
-      await expect(host.locator(".field canvas")).toBeVisible({
+      await expect(host.locator(".board canvas")).toBeVisible({
         timeout: 15_000,
       });
-      await expect(guest.locator(".field canvas")).toBeVisible({
+      await expect(guest.locator(".board canvas")).toBeVisible({
         timeout: 15_000,
       });
 
@@ -133,7 +133,7 @@ test.describe("сетевая игра", () => {
       const code = await hostCreatesRoom(host, "Кооп");
       await guestJoins(guest, "Кооп", code);
       await host.getByRole("button", { name: "Начать партию" }).click();
-      await expect(guest.locator(".field canvas")).toBeVisible({
+      await expect(guest.locator(".board canvas")).toBeVisible({
         timeout: 15_000,
       });
       await guest.waitForTimeout(1200);
@@ -149,7 +149,7 @@ test.describe("сетевая игра", () => {
       await guest.locator('.tower-btn[data-element="fire"]').click();
       const point = await guest.evaluate(() => {
         const canvas =
-          document.querySelector<HTMLCanvasElement>(".field canvas")!;
+          document.querySelector<HTMLCanvasElement>(".board canvas")!;
         const rect = canvas.getBoundingClientRect();
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const scale = Math.min(
@@ -195,7 +195,7 @@ test.describe("сетевая игра", () => {
       const code = await hostCreatesRoom(host, "Версус");
       await guestJoins(guest, "Версус", code);
       await host.getByRole("button", { name: "Начать партию" }).click();
-      await expect(guest.locator(".field canvas")).toBeVisible({
+      await expect(guest.locator(".board canvas")).toBeVisible({
         timeout: 15_000,
       });
 

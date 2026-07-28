@@ -11,7 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
 /** Считает непрозрачные пиксели холста — пустой чёрный экран так не пройдёт. */
 async function canvasHasContent(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>(".field canvas");
+    const canvas = document.querySelector<HTMLCanvasElement>(".board canvas");
     if (!canvas) return false;
     const ctx = canvas.getContext("2d");
     if (!ctx) return false;
@@ -38,11 +38,46 @@ async function dismissHelp(page: Page): Promise<void> {
   if (await button.isVisible().catch(() => false)) await button.click();
 }
 
+
+/**
+ * Экранная точка центра клетки поля.
+ *
+ * Повторяет расчёт из FieldRenderer, включая поворот: на узком экране поле
+ * рисуется развёрнутым на четверть оборота, и координаты без этого не сходятся.
+ */
+async function cellPoint(
+  page: Page,
+  col: number,
+  row: number,
+): Promise<{ x: number; y: number }> {
+  return page.evaluate(
+    (cell: { col: number; row: number }) => {
+      const canvas = document.querySelector<HTMLCanvasElement>(".board canvas")!;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const straight = Math.min(canvas.width / 960, canvas.height / 640);
+      const turned = Math.min(canvas.width / 640, canvas.height / 960);
+      const rotated = turned > straight;
+      const scale = rotated ? turned : straight;
+      const fieldW = rotated ? 640 : 960;
+      const fieldH = rotated ? 960 : 640;
+      const offsetX = (canvas.width - fieldW * scale) / 2;
+      const offsetY = (canvas.height - fieldH * scale) / 2;
+      const fx = cell.col * 64 + 32;
+      const fy = cell.row * 64 + 32;
+      const sx = rotated ? offsetX + (640 - fy) * scale : offsetX + fx * scale;
+      const sy = rotated ? offsetY + fx * scale : offsetY + fy * scale;
+      return { x: rect.left + sx / dpr, y: rect.top + sy / dpr };
+    },
+    { col, row },
+  );
+}
+
 async function startSolo(page: Page): Promise<void> {
   await page.goto("/");
   await dismissHelp(page);
   await page.getByRole("button", { name: "Играть", exact: true }).click();
-  await expect(page.locator(".field canvas")).toBeVisible();
+  await expect(page.locator(".board canvas")).toBeVisible();
 }
 
 test("меню открывается и показывает все режимы", async ({ page }) => {
@@ -96,24 +131,7 @@ test("башня ставится по клику и списывает золо
 
   await page.locator('.tower-btn[data-element="fire"]').click();
 
-  // Кликаем по центру первой свободной площадки, а не наугад по холсту.
-  const target = await page.evaluate(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>(".field canvas")!;
-    const rect = canvas.getBoundingClientRect();
-    // Логика та же, что в игре: поле 960×640 вписано в холст с полями.
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const scale = Math.min((rect.width * dpr) / 960, (rect.height * dpr) / 640);
-    const offsetX = (rect.width * dpr - 960 * scale) / 2;
-    const offsetY = (rect.height * dpr - 640 * scale) / 2;
-    // Первая площадка карты «Змейка» — колонка 0, ряд 0 сетки 15×10.
-    const cellCenterX = 0 * 64 + 32;
-    const cellCenterY = 0 * 64 + 32;
-    return {
-      x: rect.left + (cellCenterX * scale + offsetX) / dpr,
-      y: rect.top + (cellCenterY * scale + offsetY) / dpr,
-    };
-  });
-
+  const target = await cellPoint(page, 0, 0);
   await page.mouse.click(target.x, target.y);
   await page.waitForTimeout(300);
 
@@ -189,7 +207,7 @@ test("в интерфейс помещается всё нужное и ниче
   );
   expect(overflow).toBeLessThanOrEqual(1);
 
-  for (const selector of [".hud", ".field canvas", ".towers", ".actions"]) {
+  for (const selector of [".hud", ".board canvas", ".towers", ".actions"]) {
     await expect(page.locator(selector)).toBeVisible();
   }
 
@@ -206,18 +224,17 @@ test("версус с ботом: отправка монстров соперн
   await dismissHelp(page);
   await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
   await page.getByRole("button", { name: "Играть", exact: true }).click();
-  await expect(page.locator(".field canvas")).toBeVisible();
+  await expect(page.locator(".board canvas")).toBeVisible();
   await page.waitForTimeout(600);
 
   // Панель отправки появляется только в версусе.
-  await expect(page.locator('.dock:has-text("Отправить сопернику")')).toBeVisible();
+  await expect(page.locator(".side")).toContainText("Отправить сопернику");
 
   const goldBefore = Number(
     (await page.locator(".hud__gold span").last().textContent())!.replace(/\D/g, ""),
   );
 
-  // Первая кнопка отправки — самый дешёвый монстр.
-  const sendButton = page.locator(".towers").nth(0).locator(".tower-btn").first();
+  const sendButton = page.locator(".sends .send-btn").first();
   await sendButton.click();
   await page.waitForTimeout(400);
 
@@ -227,23 +244,30 @@ test("версус с ботом: отправка монстров соперн
   expect(goldAfter).toBeLessThan(goldBefore);
 });
 
-test("версус: поле соперника можно посмотреть, но не застроить", async ({ page }) => {
+test("версус: поле соперника всегда видно и его нельзя застроить", async ({ page }) => {
   await page.goto("/");
   await dismissHelp(page);
   await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
   await page.getByRole("button", { name: "Играть", exact: true }).click();
-  await expect(page.locator(".field canvas")).toBeVisible();
+  await expect(page.locator(".board canvas")).toBeVisible();
   await page.waitForTimeout(600);
 
-  await page.getByRole("button", { name: "Поле соперника" }).click();
-  await expect(page.locator(".hud__next")).toContainText("смотрим поле соперника");
+  // Карта соперника всегда на виду — переключаться, чтобы её увидеть, не нужно.
+  await expect(page.locator(".rival__canvas")).toBeVisible();
 
-  // Пока смотрим чужое поле, панель башен заблокирована целиком.
-  const disabled = await page.locator(".tower-btn[data-element]:disabled").count();
-  expect(disabled).toBe(6);
+  // По ней можно кликнуть, чтобы поменять поля местами.
+  await page.locator(".rival__canvas").click();
+  await expect(page.locator(".rival__stats")).toContainText("Твоё поле");
 
-  await page.getByRole("button", { name: "Своё поле" }).click();
-  await expect(page.locator(".hud__next")).toContainText("следующая волна");
+  // Пока в основном окне чужое поле, панель башен заблокирована целиком.
+  await expect
+    .poll(() => page.locator(".tower-btn[data-element]:disabled").count(), {
+      timeout: 5000,
+    })
+    .toBe(6);
+
+  await page.locator(".rival__canvas").click();
+  await expect(page.locator(".rival__stats")).toContainText("Поле соперника");
 });
 
 test("холст совпадает с местом, которое занимает на экране", async ({ page }) => {
@@ -255,14 +279,14 @@ test("холст совпадает с местом, которое занима
   await dismissHelp(page);
   await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
   await page.getByRole("button", { name: "Играть", exact: true }).click();
-  await expect(page.locator(".field canvas")).toBeVisible();
+  await expect(page.locator(".board canvas")).toBeVisible();
 
   await expect
     .poll(
       () =>
         page.evaluate(() => {
           const canvas =
-            document.querySelector<HTMLCanvasElement>(".field canvas")!;
+            document.querySelector<HTMLCanvasElement>(".board canvas")!;
           const rect = canvas.getBoundingClientRect();
           const dpr = Math.min(window.devicePixelRatio || 1, 2);
           return (
@@ -282,26 +306,9 @@ test("улучшение башни сразу видно в панели", asyn
   await startSolo(page);
   await page.waitForTimeout(600);
 
-  const cellPoint = (col: number, row: number) =>
-    page.evaluate(
-      (cell: { col: number; row: number }) => {
-        const canvas =
-          document.querySelector<HTMLCanvasElement>(".field canvas")!;
-        const rect = canvas.getBoundingClientRect();
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const scale = Math.min(canvas.width / 960, canvas.height / 640);
-        const offsetX = (canvas.width - 960 * scale) / 2;
-        const offsetY = (canvas.height - 640 * scale) / 2;
-        return {
-          x: rect.left + ((cell.col * 64 + 32) * scale + offsetX) / dpr,
-          y: rect.top + ((cell.row * 64 + 32) * scale + offsetY) / dpr,
-        };
-      },
-      { col, row },
-    );
 
   await page.locator('.tower-btn[data-element="fire"]').click();
-  const point = await cellPoint(0, 0);
+  const point = await cellPoint(page, 0, 0);
   await page.mouse.click(point.x, point.y);
   await page.waitForTimeout(400);
 

@@ -30,6 +30,15 @@ export interface ViewTransform {
   scale: number;
   offsetX: number;
   offsetY: number;
+  /**
+   * Повёрнуто ли поле на четверть оборота.
+   *
+   * Поле вытянуто по горизонтали (960 на 640), а телефон в руке — по
+   * вертикали. Без поворота карта занимает узкую полосу в треть экрана и
+   * разглядеть на ней что-либо невозможно. Повёрнутая — вдвое крупнее по
+   * площади: длинная сторона поля ложится вдоль длинной стороны экрана.
+   */
+  rotated: boolean;
 }
 
 export interface RenderOptions {
@@ -52,16 +61,37 @@ export class FieldRenderer {
 
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
 
-  /** Пересчёт масштаба под текущий размер холста, с полями по краям. */
+  /**
+   * Пересчёт масштаба под размер холста.
+   *
+   * Поворот выбирается не по ориентации устройства, а по тому, как выгоднее:
+   * если повёрнутое поле помещается крупнее — поворачиваем. На широком экране
+   * это никогда не срабатывает, на телефоне в руке — всегда.
+   */
   static fit(canvasWidth: number, canvasHeight: number): ViewTransform {
-    const scale = Math.min(
+    const straight = Math.min(
       canvasWidth / FIELD_WIDTH,
       canvasHeight / FIELD_HEIGHT,
     );
+    const turned = Math.min(
+      canvasWidth / FIELD_HEIGHT,
+      canvasHeight / FIELD_WIDTH,
+    );
+
+    if (turned > straight) {
+      return {
+        scale: turned,
+        offsetX: (canvasWidth - FIELD_HEIGHT * turned) / 2,
+        offsetY: (canvasHeight - FIELD_WIDTH * turned) / 2,
+        rotated: true,
+      };
+    }
+
     return {
-      scale,
-      offsetX: (canvasWidth - FIELD_WIDTH * scale) / 2,
-      offsetY: (canvasHeight - FIELD_HEIGHT * scale) / 2,
+      scale: straight,
+      offsetX: (canvasWidth - FIELD_WIDTH * straight) / 2,
+      offsetY: (canvasHeight - FIELD_HEIGHT * straight) / 2,
+      rotated: false,
     };
   }
 
@@ -71,10 +101,31 @@ export class FieldRenderer {
     screenX: number,
     screenY: number,
   ): { x: number; y: number } {
-    return {
-      x: (screenX - view.offsetX) / view.scale,
-      y: (screenY - view.offsetY) / view.scale,
-    };
+    const dx = screenX - view.offsetX;
+    const dy = screenY - view.offsetY;
+    if (view.rotated) {
+      // Обратное к повороту на четверть оборота по часовой стрелке.
+      return { x: dy / view.scale, y: FIELD_HEIGHT - dx / view.scale };
+    }
+    return { x: dx / view.scale, y: dy / view.scale };
+  }
+
+  /**
+   * Ставит систему координат холста так, чтобы дальше можно было рисовать
+   * прямо в игровых координатах поля.
+   */
+  static applyTransform(
+    ctx: CanvasRenderingContext2D,
+    view: ViewTransform,
+  ): void {
+    ctx.translate(view.offsetX, view.offsetY);
+    if (view.rotated) {
+      ctx.rotate(Math.PI / 2);
+      ctx.scale(view.scale, view.scale);
+      ctx.translate(0, -FIELD_HEIGHT);
+    } else {
+      ctx.scale(view.scale, view.scale);
+    }
   }
 
   draw(
@@ -87,8 +138,7 @@ export class FieldRenderer {
     const ctx = this.ctx;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.translate(view.offsetX, view.offsetY);
-    ctx.scale(view.scale, view.scale);
+    FieldRenderer.applyTransform(ctx, view);
 
     this.drawGround(map);
     this.drawPads(map, options.hoverCell);

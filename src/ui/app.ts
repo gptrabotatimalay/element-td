@@ -234,6 +234,13 @@ export class App {
       setup.botStrategy,
     );
 
+    // Поле соперника показываем только когда оно вообще есть.
+    if (setup.mode === "versus" || setup.mode === "coop") {
+      this.session.attachMinimap(screen.rivalCanvas);
+    } else {
+      screen.setRivalVisible(false);
+    }
+
     // Размер холста известен только после вставки в документ.
     requestAnimationFrame(() => {
       this.session?.resize();
@@ -300,6 +307,8 @@ export class App {
       client,
       field,
     });
+
+    session.attachMinimap(screen.rivalCanvas);
 
     client.onSnapshotReceived = (snapshot) => session.applySnapshot(snapshot);
     client.onRemoteCommand = (cmd) => session.enqueueRemote(cmd);

@@ -36,6 +36,14 @@ export interface RoomHandlers {
 /** Пауза перед повторной попыткой, растёт до максимума. */
 const RETRY_BASE_MS = 700;
 const RETRY_MAX_MS = 6000;
+/**
+ * После скольких неудачных попыток перестаём молча дёргаться и говорим прямо.
+ *
+ * Игру можно открыть там, где сервера комнат просто нет — например на витрине
+ * GitHub Pages. Бесконечное «подключение…» в таком месте выглядит поломкой,
+ * хотя это ожидаемое поведение, и человеку надо об этом сказать.
+ */
+const RETRIES_BEFORE_GIVING_UP = 4;
 const PING_INTERVAL_MS = 3000;
 
 export function roomUrl(code: string): string {
@@ -194,6 +202,18 @@ export class RoomClient {
 
   private scheduleRetry(): void {
     if (this.closedByUs) return;
+
+    if (this.retries >= RETRIES_BEFORE_GIVING_UP) {
+      this.closedByUs = true;
+      this.setConnection("closed");
+      this.handlers.onError?.(
+        "Сервер комнат недоступен. Сетевая игра работает только там, " +
+          "где запущен сервер: локально командой «npm run worker» или на " +
+          "опубликованной версии. Соло и версус с ботом доступны всегда.",
+      );
+      return;
+    }
+
     this.setConnection("reconnecting");
     const delay = Math.min(RETRY_BASE_MS * 2 ** this.retries, RETRY_MAX_MS);
     this.retries++;

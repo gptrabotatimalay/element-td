@@ -58,7 +58,7 @@ async function cellPoint(
     (cell: { col: number; row: number }) => {
       const canvas = document.querySelector<HTMLCanvasElement>(".board canvas")!;
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
+      const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
       const straight = Math.min(canvas.width / 960, canvas.height / 640);
       const turned = Math.min(canvas.width / 640, canvas.height / 960);
       const rotated = turned > straight;
@@ -292,7 +292,7 @@ test("холст совпадает с местом, которое занима
           const canvas =
             document.querySelector<HTMLCanvasElement>(".board canvas")!;
           const rect = canvas.getBoundingClientRect();
-          const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
+          const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
           return (
             Math.abs(canvas.width - Math.round(rect.width * dpr)) +
             Math.abs(canvas.height - Math.round(rect.height * dpr))
@@ -328,4 +328,42 @@ test("улучшение башни сразу видно в панели", asyn
   await expect(page.locator(".inspect__head")).toContainText("уровень 2", {
     timeout: 10_000,
   });
+});
+
+test("клик по полю работает после того, как мышь отпустили вне холста", async ({
+  page,
+}) => {
+  // Указатель захватывается на время нажатия. Без захвата отпускание за
+  // пределами холста до него не доходило: поле оставалось «занятым», и
+  // следующий клик по нему пропадал.
+  await startSolo(page);
+  await page.waitForTimeout(500);
+
+  const point = await cellPoint(page, 0, 0);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+
+  // Уводим курсор на боковую панель и отпускаем уже там.
+  const side = (await page.locator(".side").boundingBox())!;
+  await page.mouse.move(side.x + side.width / 2, side.y + 40);
+  await page.mouse.up();
+
+  const goldBefore = Number(
+    (await page.locator(".hud__gold span").last().textContent())!.replace(
+      /\D/g,
+      "",
+    ),
+  );
+
+  await page.locator('.tower-btn[data-element="fire"]').click();
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(400);
+
+  const goldAfter = Number(
+    (await page.locator(".hud__gold span").last().textContent())!.replace(
+      /\D/g,
+      "",
+    ),
+  );
+  expect(goldAfter).toBeLessThan(goldBefore);
 });

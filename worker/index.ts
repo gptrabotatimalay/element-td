@@ -156,6 +156,8 @@ export class GameRoom {
 
       case "start": {
         if (from.index !== this.hostIndex || !this.config) return;
+        // Партия уже идёт — повторное объявление только сбивает клиентов.
+        if (this.started) return;
         this.started = true;
         this.broadcast({ t: "start", config: this.config as never }, null);
         return;
@@ -207,6 +209,14 @@ export class GameRoom {
     if (participant.index === this.hostIndex && this.started) {
       this.started = false;
       this.broadcast({ t: "hostLeft" }, null);
+    }
+
+    // Роль хоста переходит оставшемуся. Раньше hostIndex продолжал указывать
+    // на ушедшего: оставшийся видел «ждём, пока хост начнёт партию», а его
+    // собственные команды сервер молча отбрасывал как чужие.
+    if (participant.index === this.hostIndex) {
+      const heir = this.participants.find((p) => p.connected);
+      if (heir) this.hostIndex = heir.index;
     }
 
     this.broadcast(

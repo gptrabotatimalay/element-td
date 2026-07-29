@@ -156,7 +156,7 @@ test.describe("сетевая игра", () => {
         const canvas =
           document.querySelector<HTMLCanvasElement>(".board canvas")!;
         const rect = canvas.getBoundingClientRect();
-        const dpr = Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
+        const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
         const scale = Math.min(
           (rect.width * dpr) / 960,
           (rect.height * dpr) / 640,

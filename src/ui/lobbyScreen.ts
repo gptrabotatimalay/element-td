@@ -39,6 +39,7 @@ export function createLobbyScreen(
 ): () => void {
   let client: RoomClient | null = null;
   let config: RoomConfig | null = null;
+  let started = false;
   let isHost = false;
   let you = -1;
 
@@ -136,6 +137,15 @@ export function createLobbyScreen(
       onStart: (received) => {
         config = received;
         if (!client) return;
+        // Партия запускается ровно один раз.
+        //
+        // Сообщение «start» приходит не только по кнопке хоста: сервер шлёт
+        // его каждому, кто входит в уже идущую партию, — а входят и после
+        // короткого обрыва связи, клиент переподключается сам. Повторный
+        // запуск сносил текущую партию и закрывал только что восстановленный
+        // сокет, после чего игрок навсегда оставался перед мёртвым полем.
+        if (started) return;
+        started = true;
         const result: LobbyResult = { client, config, isHost, you };
         overlay.remove();
         onStart(result);
@@ -190,7 +200,12 @@ export function createLobbyScreen(
       }) as HTMLButtonElement;
       // Партию вдвоём нет смысла начинать в одиночку — второе поле будет пустым.
       startBtn.disabled = players.length < 2;
-      startBtn.addEventListener("click", () => client?.send({ t: "start" }));
+      startBtn.addEventListener("click", () => {
+        // Гасим сразу: между нажатием и ответом сервера проходит время, за
+        // которое нетерпеливый игрок успевает нажать второй раз.
+        startBtn.disabled = true;
+        client?.send({ t: "start" });
+      });
       panel.append(startBtn);
     }
 

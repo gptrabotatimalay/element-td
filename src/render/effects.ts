@@ -42,6 +42,8 @@ const COIN_LIFE = 0.7;
 
 export class EffectLayer {
   private effects: Effect[] = [];
+  /** Развёрнуто ли поле: от этого зависит, как разворачивать надписи обратно. */
+  rotated = false;
 
   /** Разбор журнала событий тика. Крупные награды показываем, мелкие — нет. */
   ingest(events: readonly GameEvent[]): void {
@@ -167,8 +169,11 @@ export class EffectLayer {
     ctx.fillStyle = PALETTE.gold;
     ctx.font = "bold 16px system-ui, sans-serif";
     ctx.textAlign = "center";
-    // Всплывает вверх по мере угасания.
-    ctx.fillText(`+${effect.amount}`, effect.x, effect.y - (1 - t) * 26);
+    // Текст рисуем в координатах экрана, а не поля: на телефоне поле
+    // развёрнуто на четверть оборота, и вместе с ним цифры ложились набок.
+    ctx.translate(effect.x, effect.y - (1 - t) * 26);
+    if (this.rotated) ctx.rotate(-Math.PI / 2);
+    ctx.fillText(`+${effect.amount}`, 0, 0);
     ctx.restore();
   }
 

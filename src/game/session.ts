@@ -318,7 +318,7 @@ export class GameSession {
   ): void {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = canvasScale();
     canvas.width = Math.round(rect.width * dpr);
     canvas.height = Math.round(rect.height * dpr);
     assign(FieldRenderer.fit(canvas.width, canvas.height));
@@ -465,13 +465,16 @@ export class GameSession {
     const field = this.state.fields[this.playerField];
     if (!field) return;
 
+    // На чужом поле строить нельзя, поэтому ни рамки на площадке, ни круга
+    // радиуса там быть не должно: они обещают действие, которого не будет.
+    const own = this.playerField === this.ownField;
     const previewRange =
-      this.placement.kind === "build" && this.placement.element !== "light"
+      own && this.placement.kind === "build" && this.placement.element !== "light"
         ? towerRange(this.placement.element, 1)
         : null;
 
     this.renderer.draw(field, this.map, this.view, this.state.tick, {
-      hoverCell: this.hoverCell,
+      hoverCell: own ? this.hoverCell : null,
       selectedTowerId: this.selectedTowerId,
       previewRange,
       alpha: this.smoothing(),
@@ -479,6 +482,7 @@ export class GameSession {
 
     ctx.save();
     FieldRenderer.applyTransform(ctx, this.view);
+    this.effects.rotated = this.view.rotated;
     this.effects.draw(ctx);
     ctx.restore();
 
@@ -511,7 +515,9 @@ export class GameSession {
       hoverCell: null,
       selectedTowerId: null,
       previewRange: null,
-      alpha: this.smoothing(),
+      // Между кадрами мини-карты проходит несколько тиков, поэтому доля
+      // основного поля здесь не годится: с ней монстры дёргались.
+      alpha: 1,
     });
   }
 

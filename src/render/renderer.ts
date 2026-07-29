@@ -95,6 +95,8 @@ export class FieldRenderer {
    */
   private background: HTMLCanvasElement | null = null;
   private backgroundMapId = "";
+  /** Развёрнуто ли поле — надписи и полоски разворачиваются обратно. */
+  private rotated = false;
 
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
 
@@ -175,6 +177,7 @@ export class FieldRenderer {
     const ctx = this.ctx;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
+    this.rotated = view.rotated;
     FieldRenderer.applyTransform(ctx, view);
 
     ctx.drawImage(this.groundLayer(map), 0, 0);
@@ -423,14 +426,21 @@ export class FieldRenderer {
     if (creep.hp >= creep.maxHp) return;
     const ctx = this.ctx;
     const width = Math.max(20, size * 0.7);
-    const top = y - size / 2 - (creep.flying ? 14 : 6);
+    const offset = size / 2 + (creep.flying ? 14 : 6);
     const ratio = Math.max(0, creep.hp / creep.maxHp);
 
+    // На повёрнутом поле полоска должна оставаться горизонтальной и висеть
+    // над монстром так же, как на обычном — иначе она встаёт на бок и
+    // «над головой» оказывается сбоку.
+    ctx.save();
+    ctx.translate(x, y);
+    if (this.rotated) ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = PALETTE.ink;
-    ctx.fillRect(x - width / 2 - 1, top - 1, width + 2, 5);
+    ctx.fillRect(-width / 2 - 1, -offset - 1, width + 2, 5);
     ctx.fillStyle =
       ratio > 0.5 ? "#5ac85a" : ratio > 0.25 ? PALETTE.gold : PALETTE.blood;
-    ctx.fillRect(x - width / 2, top, width * ratio, 3);
+    ctx.fillRect(-width / 2, -offset, width * ratio, 3);
+    ctx.restore();
   }
 
   private drawProjectiles(field: Field): void {

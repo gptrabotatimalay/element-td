@@ -352,6 +352,10 @@ export function createGameScreen(
     if (activePointer !== null) return;
     event.preventDefault();
     activePointer = event.pointerId;
+    // Захватываем указатель: без этого отпускание за пределами холста
+    // не приходит сюда вовсе, и поле остаётся «занятым» — следующий клик
+    // по нему пропадал.
+    canvas.setPointerCapture?.(event.pointerId);
     pressX = event.clientX;
     pressY = event.clientY;
     if (event.pointerType !== "mouse")
@@ -361,6 +365,7 @@ export function createGameScreen(
   const finishPointer = (event: PointerEvent, apply: boolean): void => {
     if (event.pointerId !== activePointer) return;
     activePointer = null;
+    canvas.releasePointerCapture?.(event.pointerId);
     const s = session();
 
     const moved =
@@ -737,10 +742,12 @@ export function createGameScreen(
    * нажатие «Улучшить» выглядело так, будто ничего не произошло.
    */
   function inspectSignature(s: GameSession): string {
-    const own0 = s.state.fields[s.ownField];
     if (s.selectedTowerId === null) {
-      // Ничего не выбрано — показывается расписание, оно зависит от волны.
-      return `расписание:${own0?.waveIndex ?? -1}:${s.playerField}`;
+      // Ничего не выбрано — показывается расписание. Оно строится по тому же
+      // полю, которое сейчас на экране, поэтому и слепок берём оттуда же:
+      // иначе при просмотре чужого поля список переставал обновляться.
+      const shownField = s.state.fields[s.playerField];
+      return `расписание:${shownField?.waveIndex ?? -1}:${s.playerField}`;
     }
     const field = s.state.fields[s.playerField];
     const own = s.state.fields[s.ownField];

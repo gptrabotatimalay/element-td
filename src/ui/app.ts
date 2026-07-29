@@ -334,12 +334,23 @@ export class App {
       session.enqueueRemote(cmd, config.mode === "coop" ? 0 : from);
     // Партию считает только хост. Если он ушёл, гостю незачем смотреть
     // в застывшее поле — говорим прямо и возвращаем в меню.
+    // Просадка сети у хоста выглядит так же, как его уход: сервер сразу
+    // сообщает «хост ушёл», хотя клиент хоста переподключается за секунду.
+    // Гостю давалась отсрочка только на своих обрывах, а на чужих партия
+    // обрывалась мгновенно. Ждём столько же, сколько ждёт хост.
+    let hostGoneTimer: number | null = null;
     client.onHostGone = () => {
-      this.session?.stop();
-      this.showInterrupted(
-        "Хост вышел из игры",
-        "Партию продолжать некому — второй игрок закрыл вкладку или потерял связь.",
-      );
+      if (hostGoneTimer !== null) return;
+      hostGoneTimer = window.setTimeout(() => {
+        hostGoneTimer = null;
+        if (this.session?.state.over) return;
+        if (client.players.length >= 2) return;
+        this.session?.stop();
+        this.showInterrupted(
+          "Хост вышел из игры",
+          "Второй игрок закрыл вкладку или потерял связь и не вернулся.",
+        );
+      }, RECONNECT_GRACE_MS);
     };
 
     // Обрыв связи посреди партии раньше сообщался в панель лобби, которой

@@ -27,6 +27,13 @@ import {
   saveSettings,
 } from "./storage";
 
+/**
+ * Сколько ждём возвращения соперника, прежде чем закончить партию.
+ * На телефоне связь проседает регулярно, и мгновенное завершение по первому
+ * же разрыву делало сетевую игру невозможной.
+ */
+const RECONNECT_GRACE_MS = 12_000;
+
 interface MatchSetup {
   mode: GameMode;
   difficulty: Difficulty;
@@ -342,14 +349,26 @@ export class App {
       this.showInterrupted("Связь потеряна", message);
     };
 
-    // Уход соперника видит и хост: считать партию в пустоту незачем.
+    // Уход соперника видит и хост. Но короткий разрыв связи выглядит так же,
+    // как уход, поэтому даём время на переподключение и только потом
+    // заканчиваем партию — иначе секундная просадка сети хоронила игру.
+    let rosterTimer: number | null = null;
     client.onRoster = (players) => {
+      if (rosterTimer !== null) {
+        window.clearTimeout(rosterTimer);
+        rosterTimer = null;
+      }
       if (players.length >= 2 || this.session?.state.over) return;
-      this.session?.stop();
-      this.showInterrupted(
-        "Соперник вышел",
-        "Второй игрок покинул комнату. Партию можно начать заново из меню.",
-      );
+
+      rosterTimer = window.setTimeout(() => {
+        if (this.session?.state.over) return;
+        if (client.players.length >= 2) return;
+        this.session?.stop();
+        this.showInterrupted(
+          "Соперник вышел",
+          "Второй игрок покинул комнату и не вернулся. Партию можно начать заново из меню.",
+        );
+      }, RECONNECT_GRACE_MS);
     };
 
     this.session = session;
@@ -361,6 +380,9 @@ export class App {
 
   /** Партия оборвалась не по правилам: сеть, ушедший игрок и тому подобное. */
   private showInterrupted(title: string, text: string): void {
+    // Причин оборваться несколько (ушёл хост, опустела комната, пропала
+    // связь), и раньше они показывались одна поверх другой.
+    if (this.root.querySelector(".overlay")) return;
     const overlay = el("div", { class: "overlay" });
     const panel = el("div", { class: "panel" }, [
       el("h2", { text: title }),

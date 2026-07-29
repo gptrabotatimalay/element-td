@@ -4,11 +4,12 @@ import { AutoPlayer, getStrategy } from "../src/ai/strategies";
 import {
   CREEPS_PER_WAVE,
   CREEP_BASE_SPEED,
-  FUSION_COST_SHARE,
+  fusionCost,
   LENGTH,
   SEND,
   SPAWN_INTERVAL,
   TICK_RATE,
+  RUSH_GOLD_PER_TICK,
   WAVE_INTERVAL,
   towerCost,
 } from "../src/core/balance";
@@ -383,18 +384,56 @@ describe("темп волн", () => {
 });
 
 describe("досрочный призыв волны", () => {
-  it("срабатывает один раз на волну, а не каждый тик", () => {
-    // Команда обнуляла таймер, обработка волн тут же ставила его заново, и
-    // следующий тик снова принимал призыв: за сто секунд набегало под тысячу
-    // выплат и лавина волн одновременно.
-    const state = createGame({ ...baseOptions, length: "classic" });
+  it("не принимается чаще, чем раз в интервал волны", () => {
+    // Проверяем именно золото и число принятых команд за отрезок времени.
+    // Прежняя проверка «принято не больше, чем волн» не значила ничего:
+    // каждый принятый призыв сам увеличивает номер волны, поэтому условие
+    // выполнялось всегда — и настоящую поломку она пропустила.
+    const TICKS = 3000;
+    const state = createGame({ ...baseOptions, length: "endless" });
     let accepted = 0;
-    for (let i = 0; i < 3000 && !state.over; i++) {
+    for (let i = 0; i < TICKS && !state.over; i++) {
       if (applyCommand(state, { t: "rush", field: 0 })) accepted++;
       step(state);
     }
+
+    const maxAccepted = Math.ceil(TICKS / WAVE_INTERVAL) + 1;
+    expect(accepted).toBeLessThanOrEqual(maxAccepted);
+
+    // Больше, чем полная выплата за каждый разрешённый призыв, набежать
+    // не может ни при каком раскладе.
     const field = state.fields[0]!;
-    expect(accepted).toBeLessThanOrEqual(field.waveIndex);
+    expect(field.stats.goldEarned).toBeLessThan(
+      maxAccepted * WAVE_INTERVAL * RUSH_GOLD_PER_TICK + 3000,
+    );
+  });
+
+  it("не даёт преимущества при прочих равных", () => {
+    // Одна и та же разумная игра со спамом призывов и без. Разница в шансах
+    // должна быть небольшой: призыв — тактический выбор, а не способ
+    // выиграть партию нажатием одной кнопки.
+    const play = (strategyId: string) => {
+      const results = [];
+      for (let i = 0; i < 12; i++) {
+        const mapId = MAPS[i % MAPS.length]!.id;
+        const bot = new AutoPlayer(getStrategy(strategyId), 0, 909 + i, mapId);
+        results.push(
+          runGame({
+            mode: "solo",
+            difficulty: "hard",
+            length: "classic",
+            mapId,
+            seed: 700 + i * 313,
+            controller: (state) => bot.update(state),
+          }),
+        );
+      }
+      return summarize(results);
+    };
+
+    const plain = play("balanced");
+    const rushing = play("rusher");
+    expect(rushing.winRate - plain.winRate).toBeLessThan(0.35);
   });
 
   it("не даёт золота после последней волны", () => {
@@ -410,24 +449,28 @@ describe("досрочный призыв волны", () => {
     expect(field.gold).toBe(goldBefore);
   });
 
-  it("спам призывов не выигрывает партию", () => {
-    // Раш — обмен времени на риск, а не способ печатать золото.
-    const results = [];
-    for (let i = 0; i < 12; i++) {
-      const mapId = MAPS[i % MAPS.length]!.id;
-      const bot = new AutoPlayer(getStrategy("rusher"), 0, 4242 + i, mapId);
-      results.push(
-        runGame({
-          mode: "solo",
-          difficulty: "hard",
-          length: "classic",
-          mapId,
-          seed: 500 + i * 131,
-          controller: (state) => bot.update(state),
+  it("чужая стихия в команде не ломает золото", () => {
+    // Обращение ELEMENT[value] для «constructor» и подобных возвращало
+    // функцию из прототипа, цена считалась как NaN, проверка денег с NaN
+    // давала ложь — команда проходила, золото становилось NaN, и дальше
+    // бесплатным было вообще всё.
+    const state = createGame(baseOptions);
+    const field = state.fields[0]!;
+    const cell = getMap(baseOptions.mapId).buildCells[0]!;
+
+    for (const bad of ["constructor", "toString", "valueOf", "__proto__"]) {
+      expect(
+        applyCommand(state, {
+          t: "build",
+          field: 0,
+          cell,
+          element: bad as never,
         }),
-      );
+      ).toBe(false);
     }
-    expect(summarize(results).winRate).toBe(0);
+
+    expect(Number.isFinite(field.gold)).toBe(true);
+    expect(field.towers).toHaveLength(0);
   });
 });
 
@@ -480,6 +523,11 @@ describe("цены после правок", () => {
       applyCommand(state, { t: "upgrade", field: 0, tower: main!.id });
     }
 
+    // Цену считаем до слияния: после него вложенное в выжившую башню
+    // вбирает в себя и жертву, и саму доплату.
+    const expected = fusionCost(main!, other!);
+    const cheapSideOnly = Math.round(other!.invested * 0.35);
+
     const goldBefore = field.gold;
     applyCommand(state, {
       t: "fuse",
@@ -489,8 +537,7 @@ describe("цены после правок", () => {
     });
     const paid = goldBefore - field.gold;
 
-    expect(paid).toBeGreaterThan(
-      Math.round(other!.invested * FUSION_COST_SHARE),
-    );
+    expect(paid).toBe(expected);
+    expect(paid).toBeGreaterThan(cheapSideOnly);
   });
 });

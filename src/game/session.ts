@@ -12,6 +12,7 @@ import { ELEMENT, TICK_RATE, towerRange } from "../core/balance";
 import {
   CELL_SIZE,
   GRID_COLS,
+  GRID_ROWS,
   cellIndex,
   getMap,
   type GameMap,
@@ -20,7 +21,7 @@ import { createGame, step, type GameOptions } from "../core/sim";
 import type { Command, ElementId, GameState } from "../core/types";
 import type { RoomClient } from "../net/client";
 import { encodeSnapshot, decodeField } from "../net/snapshot";
-import type { Snapshot } from "../net/protocol";
+import { ELEMENTS, type Snapshot } from "../net/protocol";
 import { EffectLayer } from "../render/effects";
 import { FieldRenderer, type ViewTransform } from "../render/renderer";
 
@@ -49,7 +50,10 @@ const MINIMAP_INTERVAL_MS = 100;
  * Целое значение сохраняет резкость и не раздувает холст сверх нужного.
  */
 function canvasScale(): number {
-  return Math.max(1, Math.min(3, Math.floor(window.devicePixelRatio || 1)));
+  // Округление вниз ухудшало картинку там, где плотность дробная: на экране
+  // с 2.625 холст рисовался как при 2 и растягивался браузером с мылом.
+  // Берём фактическое значение, ограничив разумным потолком.
+  return Math.max(1, Math.min(3, window.devicePixelRatio || 1));
 }
 
 /**
@@ -128,6 +132,9 @@ export class GameSession {
   /** Последний снимок от хоста — гость рисует именно его. */
   private lastSnapshotTick = -1;
   private lastSnapshotAt = 0;
+  private prevLives = -1;
+  private prevWave = -1;
+  private prevProjectiles = 0;
 
   /**
    * Поле, которым управляет этот клиент. Команды всегда уходят сюда.
@@ -232,13 +239,19 @@ export class GameSession {
     this.accumulator = 0;
     this.lastSnapshotAt = performance.now();
 
+    // Гость не считает партию, поэтому журнала событий у него нет: без этого
+    // он не слышал ни выстрелов, ни утечки жизни и не видел ни одной вспышки.
+    // Восстанавливаем главное по разнице между снимками.
+    this.replayGuestEvents(snapshot);
+
     const wasOver = this.state.over;
     this.state.over = snapshot.over;
     this.state.winner = snapshot.winner;
 
     if (!wasOver && snapshot.over) {
       sound.stopMusic();
-      if (snapshot.winner === this.playerField) sound.victory();
+      // Победу определяет своё поле, а не то, на которое сейчас смотрим.
+      if (snapshot.winner === this.ownField) sound.victory();
       else sound.defeat();
       this.callbacks.onGameOver?.(this.state);
     }
@@ -502,6 +515,33 @@ export class GameSession {
     });
   }
 
+  /**
+   * Восстанавливает события по разнице снимков.
+   *
+   * Точную картину так не получить, но важное — потерю жизни, приход волны и
+   * то, что башни стреляют, — видно и слышно. Без этого сетевая партия у
+   * гостя проходила в полной тишине и без единого эффекта.
+   */
+  private replayGuestEvents(snapshot: Snapshot): void {
+    const mine = snapshot.fields[this.ownField];
+    if (!mine) return;
+
+    if (this.prevLives >= 0 && mine.lives < this.prevLives) sound.leak();
+    if (this.prevWave >= 0 && mine.wave > this.prevWave) {
+      sound.waveStart();
+    }
+    this.prevLives = mine.lives;
+    this.prevWave = mine.wave;
+
+    // Летящие снаряды означают, что башни работают.
+    const shown = snapshot.fields[this.playerField];
+    if (shown && shown.projectiles.length > this.prevProjectiles) {
+      const first = shown.projectiles[0];
+      if (first) sound.shoot(ELEMENTS[first[2]] ?? "fire");
+    }
+    this.prevProjectiles = shown?.projectiles.length ?? 0;
+  }
+
   /** Доля пути между последними двумя состояниями, 0..1. */
   private smoothing(): number {
     const span =
@@ -522,9 +562,8 @@ export class GameSession {
     );
     const col = Math.floor(point.x / CELL_SIZE);
     const row = Math.floor(point.y / CELL_SIZE);
-    if (col < 0 || row < 0 || col >= GRID_COLS) return null;
-    const cell = cellIndex(col, row);
-    return cell;
+    if (col < 0 || row < 0 || col >= GRID_COLS || row >= GRID_ROWS) return null;
+    return cellIndex(col, row);
   }
 
   /**

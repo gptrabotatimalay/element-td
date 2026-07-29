@@ -177,6 +177,10 @@ export class RoomClient {
         this.handlers.onLatency?.(this.latency);
         break;
       case "error":
+        // Отказ по существу (комната занята, разные версии) — не повод
+        // ломиться заново: сервер ответит тем же, а игрок увидит вместо
+        // причины неверное «сервер недоступен».
+        this.closedByUs = true;
         this.handlers.onError?.(message.message);
         break;
     }

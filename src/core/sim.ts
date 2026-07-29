@@ -27,9 +27,9 @@ import {
   DIFFICULTY,
   ELEMENT,
   ENDLESS_BOSS_EVERY,
-  FUSION_COST_SHARE,
   FUSION_DAMAGE_BONUS,
   findFusion,
+  fusionCost,
   FIRST_WAVE_DELAY,
   FREEZE_CHANCE,
   FREEZE_LEVEL,
@@ -47,6 +47,7 @@ import {
   SLOW_SECONDS,
   SPAWN_INTERVAL,
   TICK_RATE,
+  TARGET_MODES,
   TOWER_LEVEL_MAX,
   WAVE_INTERVAL,
   WAVE_PATTERN,
@@ -113,7 +114,7 @@ export function createGame(options: GameOptions): GameState {
       occupied: new Map(),
       auraCache: new Map(),
       alive: true,
-      rushedThisWave: false,
+      lastRushTick: -Infinity,
       events: [],
       stats: {
         goldEarned: 0,
@@ -147,6 +148,29 @@ export function createGame(options: GameOptions): GameState {
 // Команды
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Проверяет, что значение — настоящий ключ справочника, а не что-то из
+ * прототипа объекта.
+ *
+ * Обращение вида ELEMENT[value] для строк «constructor», «toString» и им
+ * подобных возвращает не undefined, а функцию из прототипа. Дальше цена
+ * башни считалась как NaN, сравнение «золота меньше цены» с NaN давало
+ * ложь, команда проходила, и золото навсегда превращалось в NaN — после
+ * чего бесплатным становилось вообще всё. По сети такую команду мог
+ * прислать второй игрок.
+ */
+function isKeyOf(table: object, value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(table, value)
+  );
+}
+
+/** Хватает ли золота. Отдельной функцией, чтобы NaN гарантированно отказывал. */
+function canAfford(gold: number, cost: number): boolean {
+  return Number.isFinite(cost) && gold >= cost;
+}
+
 /** Применяет команду. Возвращает false, если ход невозможен (нет золота и т.п.). */
 export function applyCommand(state: GameState, cmd: Command): boolean {
   const field = state.fields[cmd.field];
@@ -155,10 +179,12 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
 
   switch (cmd.t) {
     case "build": {
+      if (!isKeyOf(ELEMENT, cmd.element)) return false;
+      if (!Number.isInteger(cmd.cell)) return false;
       if (field.occupied.has(cmd.cell)) return false;
       if (!map.buildSet.has(cmd.cell)) return false;
       const cost = towerCost(cmd.element, 1);
-      if (field.gold < cost) return false;
+      if (!canAfford(field.gold, cost)) return false;
 
       const center = cellCenter(cmd.cell);
       const tower: Tower = {
@@ -186,7 +212,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       const tower = field.towers.find((t) => t.id === cmd.tower);
       if (!tower || tower.level >= TOWER_LEVEL_MAX) return false;
       const cost = towerCost(tower.element, tower.level + 1);
-      if (field.gold < cost) return false;
+      if (!canAfford(field.gold, cost)) return false;
 
       field.gold -= cost;
       field.stats.goldSpent += cost;
@@ -212,6 +238,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
     }
 
     case "target": {
+      if (!TARGET_MODES.includes(cmd.mode)) return false;
       const tower = field.towers.find((t) => t.id === cmd.tower);
       if (!tower) return false;
       tower.targetMode = cmd.mode;
@@ -222,6 +249,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       if (state.mode !== "versus") return false;
       const target = state.fields[1 - cmd.field];
       if (!target || !target.alive) return false;
+      if (!isKeyOf(SEND, cmd.kind)) return false;
       const send = SEND[cmd.kind];
       if (!send) return false;
 
@@ -233,7 +261,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       const cost = Math.round(
         send.cost * Math.pow(SEND_COST_ESCALATION, alreadySent),
       );
-      if (field.gold < cost) return false;
+      if (!canAfford(field.gold, cost)) return false;
 
       field.gold -= cost;
       field.stats.goldSpent += cost;
@@ -258,10 +286,12 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
 
     case "rush": {
       if (field.waveTimer <= 0) return false;
-      // Один призыв на волну. Иначе команда обнуляет таймер, обработка волн
-      // тут же ставит его заново, и следующий тик снова принимает призыв —
-      // выплаты идут потоком, а волны сыплются лавиной.
-      if (field.rushedThisWave) return false;
+
+      // Не чаще одного призыва за интервал волны. Призыв сам открывает
+      // следующий интервал, поэтому без запрета по времени его можно было
+      // принимать каждый тик: за сто секунд набегало под тысячу выплат
+      // и столько же волн разом.
+      if (state.tick - field.lastRushTick < WAVE_INTERVAL) return false;
 
       // После последней волны звать некого, а золото раньше продолжало капать.
       const totalWaves = LENGTH[state.length].totalWaves;
@@ -271,7 +301,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       field.gold += bonus;
       field.stats.goldEarned += bonus;
       field.waveTimer = 0;
-      field.rushedThisWave = true;
+      field.lastRushTick = state.tick;
       return true;
     }
 
@@ -288,10 +318,8 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
       // Считаем от вложенного в обе башни. Раньше цена бралась только с
       // жертвы: слить дешёвую башню первого уровня с максимальной стоило
       // копейки и давало ей четверть урона сверху даром.
-      const cost = Math.round(
-        (main.invested + other.invested) * FUSION_COST_SHARE,
-      );
-      if (field.gold < cost) return false;
+      const cost = fusionCost(main, other);
+      if (!canAfford(field.gold, cost)) return false;
 
       field.gold -= cost;
       field.stats.goldSpent += cost;
@@ -308,7 +336,7 @@ export function applyCommand(state: GameState, cmd: Command): boolean {
 
     case "heal": {
       const cost = healCost(field.stats.healCount);
-      if (field.gold < cost) return false;
+      if (!canAfford(field.gold, cost)) return false;
       field.gold -= cost;
       field.stats.goldSpent += cost;
       field.stats.healCount++;
@@ -399,7 +427,6 @@ function updateWaves(state: GameState, field: Field, rng: Rng): void {
   }
 
   spawnWave(state, field, rng);
-  field.rushedThisWave = false;
   field.events.push({
     t: "wave",
     index: field.waveIndex + 1,
@@ -665,6 +692,11 @@ function fire(
   // Молния бьёт мгновенно и прыгает по цепи — снаряд ей не нужен.
   if (tower.element === "lightning") {
     chainLightning(field, tower, target, damage);
+    // Выход отсюда пропускал hitCreep, а вместе с ним и эффект второй
+    // стихии: комбо с молнией не замедляло, не жгло и не травило.
+    if (tower.fused) {
+      applyElementEffect(tower, tower.fused, target, damage, rng);
+    }
     return;
   }
 

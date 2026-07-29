@@ -42,6 +42,12 @@ function encodeField(field: Field): FieldSnapshot {
     alive: field.alive,
     sentCount: field.stats.sentCount,
     healCount: field.stats.healCount,
+    sentByKind: (Object.entries(field.stats.sentByKind) as [string, number][])
+      .filter(([, n]) => n > 0)
+      .map(([kind, n]) => [CREEP_KINDS.indexOf(kind as never), n]),
+    killed: field.stats.creepsKilled,
+    leaked: field.stats.creepsLeaked,
+    earned: Math.round(field.stats.goldEarned),
     creeps: field.creeps.map((c) => [
       c.id,
       CREEP_KINDS.indexOf(c.kind),
@@ -142,6 +148,12 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
   const occupied = new Map<number, number>();
   for (const tower of towers) occupied.set(tower.cell, tower.id);
 
+  const sentByKind: Partial<Record<string, number>> = {};
+  for (const [kindIndex, count] of snapshot.sentByKind ?? []) {
+    const kind = CREEP_KINDS[kindIndex];
+    if (kind) sentByKind[kind] = count;
+  }
+
   return {
     owner,
     gold: snapshot.gold,
@@ -156,16 +168,16 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
     occupied,
     auraCache: new Map(),
     alive: snapshot.alive,
-    rushedThisWave: false,
+    lastRushTick: -Infinity,
     events: [],
     stats: {
-      goldEarned: 0,
+      goldEarned: snapshot.earned ?? 0,
       goldSpent: 0,
-      creepsKilled: 0,
-      creepsLeaked: 0,
+      creepsKilled: snapshot.killed ?? 0,
+      creepsLeaked: snapshot.leaked ?? 0,
       wavesSurvived: snapshot.wave,
       sentCount: snapshot.sentCount,
-      sentByKind: {},
+      sentByKind,
       healCount: snapshot.healCount,
     },
   };

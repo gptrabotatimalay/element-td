@@ -609,12 +609,14 @@ body {
 
   .towers,
   .sends {
-    grid-template-columns: repeat(3, 1fr);
+    /* Панель здесь всего 250 точек: шесть кнопок в ряд вылезали за её край. */
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .tower-btn,
   .send-btn {
     min-height: 46px;
+    min-width: 0;
     font-size: 9px;
     gap: 1px;
   }

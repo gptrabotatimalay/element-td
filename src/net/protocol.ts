@@ -123,6 +123,12 @@ export interface FieldSnapshot {
   /** Отправленные монстры и покупки жизней — для подписей в интерфейсе. */
   sentCount: number;
   healCount: number;
+  /** Отправки по типам: от них зависит цена следующей отправки. */
+  sentByKind: [number, number][];
+  /** Итоги партии: без них экран результата у гостя показывал нули. */
+  killed: number;
+  leaked: number;
+  earned: number;
 }
 
 export interface Snapshot {

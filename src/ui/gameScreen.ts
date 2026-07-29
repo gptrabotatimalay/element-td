@@ -16,7 +16,7 @@ import {
   DIFFICULTY,
   ELEMENT,
   ENDLESS_BOSS_EVERY,
-  FUSION_COST_SHARE,
+  fusionCost,
   LENGTH,
   WAVE_PATTERN,
   SEND,
@@ -722,7 +722,7 @@ export function createGameScreen(
       result.push({
         neighbour: other,
         recipe,
-        cost: Math.round(other.invested * FUSION_COST_SHARE),
+        cost: fusionCost(tower, other),
       });
     }
     return result;
@@ -794,7 +794,11 @@ export function createGameScreen(
     const cost = healCost(own.stats.healCount);
     healBtn.textContent = `Жизнь · ${formatNumber(cost)}`;
     healBtn.disabled = own.gold < cost;
-    rushBtn.disabled = own.waveTimer <= 0;
+
+    // Кнопка гаснет и когда волны кончились: раньше она оставалась активной
+    // и показывала тост «волна вызвана», хотя вызывать было уже некого.
+    const wavesLeft = total === null || own.waveIndex < total;
+    rushBtn.disabled = own.waveTimer <= 0 || !wavesLeft;
 
     // Блоки для игры вдвоём появляются один раз, когда становится ясно,
     // что полей действительно два.

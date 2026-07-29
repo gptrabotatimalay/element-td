@@ -564,6 +564,14 @@ export function towerRange(element: ElementId, level: number): number {
  */
 export const DEFAULT_TARGET_MODE: TargetMode = "closest";
 
+/** Все допустимые приоритеты цели. Нужны для проверки команд из сети. */
+export const TARGET_MODES: TargetMode[] = [
+  "first",
+  "strongest",
+  "fastest",
+  "closest",
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Комбо-башни
 // ─────────────────────────────────────────────────────────────────────────────
@@ -640,6 +648,22 @@ export const FUSIONS: FusionRecipe[] = [
     description: "Цепь разносит яд по всей волне",
   },
 ];
+
+/**
+ * Цена слияния двух башен.
+ *
+ * Считается от вложенного в обе. Раньше формула жила в трёх местах, и в двух
+ * из них осталась старая версия — от одной только жертвы. Интерфейс показывал
+ * цену в разы меньше настоящей, кнопка разблокировалась по ней же, а
+ * симуляция команду молча отклоняла: звук слияния играл, тост появлялся,
+ * башни оставались на месте.
+ */
+export function fusionCost(
+  main: { invested: number },
+  other: { invested: number },
+): number {
+  return Math.round((main.invested + other.invested) * FUSION_COST_SHARE);
+}
 
 /** Рецепт для пары стихий, в любом порядке. Свет не сливается ни с чем. */
 export function findFusion(a: ElementId, b: ElementId): FusionRecipe | null {

@@ -13,9 +13,9 @@
  */
 
 import {
-  FUSION_COST_SHARE,
   TOWER_LEVEL_MAX,
   findFusion,
+  fusionCost,
   healCost,
   towerCost,
 } from "../core/balance";
@@ -129,7 +129,7 @@ function fuseIfPossible(ctx: DecisionContext): Command[] {
       if (Math.abs(cellRow(other.cell) - row) > 1) continue;
       if (!findFusion(tower.element, other.element)) continue;
 
-      const cost = Math.round(other.invested * FUSION_COST_SHARE);
+      const cost = fusionCost(tower, other);
       if (field.gold < cost) continue;
       return [
         { t: "fuse", field: ctx.fieldIndex, tower: tower.id, with: other.id },
@@ -293,13 +293,16 @@ const fusionist: Strategy = {
  */
 const rusher: Strategy = {
   id: "rusher",
-  label: "Спам досрочных волн",
+  label: "Разумная игра + спам призывов",
   thinkInterval: 1,
   decide(ctx) {
-    if (ctx.field.waveTimer > 0) {
-      return [{ t: "rush", field: ctx.fieldIndex }];
-    }
-    return balanced.decide(ctx);
+    // Строит так же, как разумная игра, и вдобавок жмёт призыв при каждой
+    // возможности. Только так проверяется то, ради чего эта стратегия нужна:
+    // даёт ли досрочный призыв преимущество. Стратегия, которая ничего не
+    // строит, умирает на третьей волне и не проверяет ничего.
+    const commands: Command[] = [{ t: "rush", field: ctx.fieldIndex }];
+    if (ctx.state.tick % 12 === 0) commands.push(...balanced.decide(ctx));
+    return commands;
   },
 };
 

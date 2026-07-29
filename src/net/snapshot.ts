@@ -8,6 +8,7 @@
 
 import { CREEP_KIND, CREEP_BASE_SPEED } from "../core/balance";
 import { cellCenter } from "../core/map";
+import { recalcAuras } from "../core/sim";
 import type { Creep, Field, GameState, Projectile, Tower } from "../core/types";
 import {
   CREEP_KINDS,
@@ -24,11 +25,12 @@ import {
 /** Округление до целого пикселя: дробная часть в снимке не нужна никому. */
 const round = (value: number): number => Math.round(value);
 
-export function encodeSnapshot(state: GameState): Snapshot {
+export function encodeSnapshot(state: GameState, paused = false): Snapshot {
   return {
     tick: state.tick,
     over: state.over,
     winner: state.winner,
+    paused,
     fields: state.fields.map(encodeField),
   };
 }
@@ -69,6 +71,9 @@ function encodeField(field: Field): FieldSnapshot {
       t.fused ? ELEMENTS.indexOf(t.fused) : -1,
       // Без этого у гостя цена продажи и цена слияния показывались нулями.
       Math.round(t.invested),
+      // А без этого в панели башни у гостя вечно стояло «Нанесено 0», и понять,
+      // какая башня работает, а какую пора продать, было нельзя.
+      Math.round(t.damageDealt),
     ]),
     projectiles: field.projectiles.map((p) => [
       round(p.x),
@@ -127,7 +132,7 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
       cooldown: 0,
       targetMode: TARGET_MODES[t[4]] ?? "closest",
       invested: t[6] ?? 0,
-      damageDealt: 0,
+      damageDealt: t[7] ?? 0,
     };
   });
 
@@ -154,7 +159,7 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
     if (kind) sentByKind[kind] = count;
   }
 
-  return {
+  const field: Field = {
     owner,
     gold: snapshot.gold,
     lives: snapshot.lives,
@@ -181,4 +186,10 @@ export function decodeField(snapshot: FieldSnapshot, owner: number): Field {
       healCount: snapshot.healCount,
     },
   };
+
+  // Ауры в снимок не едут: они целиком выводятся из расстановки башен, поэтому
+  // дешевле пересчитать их на месте. Без этого у гостя круг дальности рисовался
+  // меньше настоящего, а прибавку от света он не видел вообще нигде.
+  recalcAuras(field);
+  return field;
 }

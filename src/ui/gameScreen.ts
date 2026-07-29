@@ -22,6 +22,7 @@ import {
   SEND,
   TICK_RATE,
   TOWER_LEVEL_MAX,
+  WAVE_INTERVAL,
   findFusion,
   healCost,
   towerCost,
@@ -96,10 +97,13 @@ export function createGameScreen(
   const soundBtn = el("button", {
     class: "hud__btn",
     title: "Звук",
-    text: "🔊",
+    // Движок звука один на всю страницу и переживает выход в меню, поэтому
+    // значок берём из него. С жёстким «🔊» во второй партии кнопка обещала
+    // звук при выключенном звуке, а первое нажатие его включало.
+    text: sound.enabled ? "🔊" : "🔇",
   });
   const exitBtn = el("button", {
-    class: "hud__btn",
+    class: "hud__btn hud__btn--exit",
     title: "Выйти в меню",
     text: "✕",
   });
@@ -265,16 +269,39 @@ export function createGameScreen(
 
   // ── Обработчики ───────────────────────────────────────────────────────────
 
-  rushBtn.addEventListener("click", () => {
+  /**
+   * Почему волну нельзя позвать прямо сейчас, или null, если можно.
+   *
+   * Условия те же, что в симуляции: судья — она, но кнопка и подсказка обязаны
+   * говорить правду. Раньше кнопка знала только про идущую волну и не знала
+   * про запрет по времени, поэтому оставалась активной и показывала тост
+   * «волна вызвана досрочно», хотя команду отклоняли.
+   */
+  function rushBlocked(s: GameSession): string | null {
+    const own = s.state.fields[s.ownField];
+    if (!own) return "нет поля";
+    const total = LENGTH[s.state.length].totalWaves;
+    if (total !== null && own.waveIndex >= total) return "волны кончились";
+    if (own.waveTimer <= 0) return "волна уже идёт";
+    const left = WAVE_INTERVAL - (s.state.tick - own.lastRushTick);
+    if (left > 0) return `ещё ${Math.ceil(left / TICK_RATE)} с`;
+    return null;
+  }
+
+  /** Один путь и для кнопки, и для клавиши N — вместе с отказом. */
+  function requestRush(): void {
     const s = session();
-    const field = s.state.fields[s.ownField];
-    if (!field || field.waveTimer <= 0) {
+    const why = rushBlocked(s);
+    if (why) {
       sound.denied();
+      toast(`Звать волну рано: ${why}`);
       return;
     }
     s.enqueue({ t: "rush", field: s.ownField });
     toast("Волна вызвана досрочно");
-  });
+  }
+
+  rushBtn.addEventListener("click", requestRush);
 
   healBtn.addEventListener("click", () => {
     const s = session();
@@ -312,9 +339,39 @@ export function createGameScreen(
     const on = !sound.enabled;
     sound.toggleSound(on);
     sound.toggleMusic(on);
-    soundBtn.textContent = on ? "🔊" : "🔇";
+    // Значок из движка, а не из желаемого: включить звук может не получиться.
+    soundBtn.textContent = sound.enabled ? "🔊" : "🔇";
   });
-  exitBtn.addEventListener("click", onExit);
+  exitBtn.addEventListener("click", confirmExit);
+
+  /**
+   * Выход из партии — необратимое действие: сохранений нет, а в сетевой партии
+   * обрывается ещё и партия соперника. Кнопка стоит вплотную к звуку, и промах
+   * пальцем на телефоне хоронил партию без единого вопроса.
+   */
+  function confirmExit(): void {
+    const overlay = el("div", { class: "overlay" });
+    const stay = el("button", {
+      class: "btn btn--primary",
+      text: "Остаться",
+    }) as HTMLButtonElement;
+    const leave = el("button", { class: "btn", text: "Выйти" });
+    stay.addEventListener("click", () => overlay.remove());
+    leave.addEventListener("click", () => {
+      overlay.remove();
+      onExit();
+    });
+    overlay.append(
+      el("div", { class: "panel" }, [
+        el("h2", { text: "Выйти в меню?" }),
+        el("p", { text: "Партия не сохранится — начинать придётся заново." }),
+        stay,
+        leave,
+      ]),
+    );
+    root.append(overlay);
+    stay.focus();
+  }
 
   function togglePause(): void {
     const s = session();
@@ -405,6 +462,9 @@ export function createGameScreen(
         cycleSpeed();
         break;
       case "tab":
+        // Перехватываем только когда есть куда переключаться: в соло и коопе
+        // поле одно, и съеденный Tab лишал панель навигации с клавиатуры.
+        if (s.state.fields.length < 2) break;
         event.preventDefault();
         swapFields();
         break;
@@ -416,7 +476,7 @@ export function createGameScreen(
         renderInspect();
         break;
       case "n":
-        s.enqueue({ t: "rush", field: s.ownField });
+        requestRush();
         break;
       default: {
         // Цифры 1–6 — быстрый выбор башни, привычно по варкрафту.
@@ -471,6 +531,7 @@ export function createGameScreen(
     const s = session();
     const field = s.state.fields[s.playerField];
     clear(inspectBox);
+    damageEl = null;
     if (!field) return;
 
     const tower =
@@ -565,6 +626,11 @@ export function createGameScreen(
       el("div", { class: "inspect__desc", text: cfg.description }),
     ]);
 
+    // Ссылку на счётчик урона храним отдельно: в слепке панели его нет (иначе
+    // панель пересобиралась бы на каждый выстрел), поэтому число обновляется
+    // поштучно в update(). Без этого оно стояло намертво.
+    damageEl = el("b", { text: formatNumber(tower.damageDealt) });
+
     const stats = el("div", { class: "inspect__stats" }, [
       el("span", {}, [
         "Урон ",
@@ -580,10 +646,7 @@ export function createGameScreen(
           ),
         }),
       ]),
-      el("span", {}, [
-        "Нанесено ",
-        el("b", { text: formatNumber(tower.damageDealt) }),
-      ]),
+      el("span", {}, ["Нанесено ", damageEl]),
     ]);
     if (aura && aura.damageMult > 1) {
       stats.append(
@@ -758,6 +821,9 @@ export function createGameScreen(
       tower.level >= TOWER_LEVEL_MAX
         ? 0
         : towerCost(tower.element, tower.level + 1);
+    // Ауры входят в слепок: панель показывает дальность с их множителем, а
+    // появиться сосед-свет может и без всякого участия выбранной башни.
+    const aura = field.auraCache.get(tower.id);
     return [
       tower.id,
       tower.level,
@@ -766,12 +832,15 @@ export function createGameScreen(
       own.gold >= nextCost ? 1 : 0,
       s.playerField,
       availableFusions(s, tower).length,
+      aura ? `${aura.damageMult}x${aura.rangeMult}` : "-",
     ].join(":");
   }
 
   let lastGold = -1;
-  let lastSeconds = -1;
+  let lastHint = "";
   let lastInspect = "";
+  /** Узел со счётчиком нанесённого урона в открытой панели башни. */
+  let damageEl: HTMLElement | null = null;
   let versusReady = false;
   let controlsChecked = false;
 
@@ -789,23 +858,32 @@ export function createGameScreen(
     waveEl.textContent =
       total === null ? `${own.waveIndex}` : `${own.waveIndex} / ${total}`;
 
+    const wavesLeft = total === null || own.waveIndex < total;
     const seconds = Math.ceil(own.waveTimer / TICK_RATE);
-    if (seconds !== lastSeconds) {
-      lastSeconds = seconds;
-      nextEl.innerHTML =
-        own.waveTimer > 0
-          ? `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`
-          : "волна идёт";
+    const blocked = rushBlocked(s);
+    // Подсказка обещает клавишу N только когда призыв действительно возможен.
+    const hint = `${seconds}:${blocked ?? ""}:${s.hostPaused ? "п" : ""}`;
+    if (hint !== lastHint) {
+      lastHint = hint;
+      nextEl.innerHTML = s.hostPaused
+        ? "хост поставил паузу"
+        : !wavesLeft
+          ? "волны кончились — добей оставшихся"
+          : own.waveTimer <= 0
+            ? "волна идёт"
+            : blocked
+              ? `следующая волна через <b>${seconds}</b> с`
+              : `следующая волна через <b>${seconds}</b> с · <b>N</b> — вызвать сейчас`;
     }
 
     const cost = healCost(own.stats.healCount);
     healBtn.textContent = `Жизнь · ${formatNumber(cost)}`;
     healBtn.disabled = own.gold < cost;
 
-    // Кнопка гаснет и когда волны кончились: раньше она оставалась активной
-    // и показывала тост «волна вызвана», хотя вызывать было уже некого.
-    const wavesLeft = total === null || own.waveIndex < total;
-    rushBtn.disabled = own.waveTimer <= 0 || !wavesLeft;
+    // Кнопка гаснет по тем же условиям, по которым симуляция откажет: и когда
+    // волны кончились, и пока не вышел запрет по времени после призыва.
+    rushBtn.disabled = blocked !== null;
+    rushBtn.title = blocked ? `Звать волну рано: ${blocked}` : "Волна раньше";
 
     // Блоки для игры вдвоём появляются один раз, когда становится ясно,
     // что полей действительно два.
@@ -841,6 +919,15 @@ export function createGameScreen(
     if (signature !== lastInspect) {
       lastInspect = signature;
       renderInspect();
+    }
+
+    // Счётчика нанесённого урона в слепке нет, поэтому обновляем сам узел:
+    // иначе он показывал число на момент открытия панели и стоял, пока
+    // игрок не тронет что-нибудь ещё.
+    if (damageEl) {
+      const tower = shown.towers.find((t) => t.id === s.selectedTowerId);
+      const text = formatNumber(tower?.damageDealt ?? 0);
+      if (damageEl.textContent !== text) damageEl.textContent = text;
     }
   }
 

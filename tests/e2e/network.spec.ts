@@ -188,6 +188,107 @@ test.describe("сетевая игра", () => {
     }
   });
 
+  test("у гостя в панели башни видно нанесённый урон, а не ноль", async ({
+    browser,
+  }) => {
+    // Гость не считает партию, поэтому всё, что показывает панель, приезжает
+    // в снимке. Нанесённого урона там не было: у гостя в панели любой башни
+    // вечно стояло «Нанесено 0», и понять, какая башня работает, было нельзя.
+    const hostCtx = await browser.newContext();
+    const guestCtx = await browser.newContext();
+    const host = await hostCtx.newPage();
+    const guest = await guestCtx.newPage();
+
+    try {
+      const code = await hostCreatesRoom(host, "Кооп");
+      await guestJoins(guest, "Кооп", code);
+      await host.getByRole("button", { name: "Начать партию" }).click();
+      await expect(guest.locator(".board canvas")).toBeVisible({
+        timeout: 15_000,
+      });
+      await guest.waitForTimeout(1200);
+
+      const point = await guest.evaluate(() => {
+        const canvas =
+          document.querySelector<HTMLCanvasElement>(".board canvas")!;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+        const scale = Math.min(
+          (rect.width * dpr) / 960,
+          (rect.height * dpr) / 640,
+        );
+        const offsetX = (rect.width * dpr - 960 * scale) / 2;
+        const offsetY = (rect.height * dpr - 640 * scale) / 2;
+        return {
+          x: rect.left + (32 * scale + offsetX) / dpr,
+          y: rect.top + (32 * scale + offsetY) / dpr,
+        };
+      });
+
+      await guest.locator('.tower-btn[data-element="fire"]').click();
+      await guest.mouse.click(point.x, point.y);
+      await guest.waitForTimeout(600);
+      // Второй клик по той же площадке открывает панель поставленной башни.
+      await guest.mouse.click(point.x, point.y);
+      await expect(guest.locator(".inspect__stats")).toContainText("Нанесено", {
+        timeout: 10_000,
+      });
+
+      // Волну зовём сразу, иначе стрелять будет не по кому, и ускоряем время.
+      await guest.getByRole("button", { name: "Волна раньше" }).click();
+      await host.locator('.hud__btn[title*="Скорость"]').click();
+      await host.locator('.hud__btn[title*="Скорость"]').click();
+
+      const damage = guest
+        .locator(".inspect__stats span", { hasText: "Нанесено" })
+        .locator("b");
+      await expect
+        .poll(
+          async () => Number((await damage.textContent())!.replace(/\D/g, "")),
+          { timeout: 40_000 },
+        )
+        .toBeGreaterThan(0);
+    } finally {
+      await hostCtx.close();
+      await guestCtx.close();
+    }
+  });
+
+  test("пауза хоста видна гостю словами, а не замершим экраном", async ({
+    browser,
+  }) => {
+    const hostCtx = await browser.newContext();
+    const guestCtx = await browser.newContext();
+    const host = await hostCtx.newPage();
+    const guest = await guestCtx.newPage();
+
+    try {
+      const code = await hostCreatesRoom(host, "Версус");
+      await guestJoins(guest, "Версус", code);
+      await host.getByRole("button", { name: "Начать партию" }).click();
+      await expect(guest.locator(".board canvas")).toBeVisible({
+        timeout: 15_000,
+      });
+      await guest.waitForTimeout(1500);
+
+      // Пауза не едет вместе с тиками: пока хост стоит, снимки не уходят.
+      // Раньше у гостя просто замирала картинка, и от обрыва связи он это
+      // отличить не мог.
+      await host.locator('.hud__btn[title*="Пауза"]').click();
+      await expect(guest.locator(".hud__next")).toContainText("паузу", {
+        timeout: 10_000,
+      });
+
+      await host.locator('.hud__btn[title*="Пауза"]').click();
+      await expect(guest.locator(".hud__next")).not.toContainText("паузу", {
+        timeout: 10_000,
+      });
+    } finally {
+      await hostCtx.close();
+      await guestCtx.close();
+    }
+  });
+
   test("уход хоста не оставляет гостя в подвешенном состоянии", async ({
     browser,
   }) => {

@@ -29,7 +29,6 @@ async function canvasHasContent(page: Page): Promise<boolean> {
   });
 }
 
-
 /**
  * Закрывает правила, если они показались.
  *
@@ -41,7 +40,6 @@ async function dismissHelp(page: Page): Promise<void> {
   const button = page.getByRole("button", { name: "Понятно" });
   if (await button.isVisible().catch(() => false)) await button.click();
 }
-
 
 /**
  * Экранная точка центра клетки поля.
@@ -56,7 +54,8 @@ async function cellPoint(
 ): Promise<{ x: number; y: number }> {
   return page.evaluate(
     (cell: { col: number; row: number }) => {
-      const canvas = document.querySelector<HTMLCanvasElement>(".board canvas")!;
+      const canvas =
+        document.querySelector<HTMLCanvasElement>(".board canvas")!;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
       const straight = Math.min(canvas.width / 960, canvas.height / 640);
@@ -221,9 +220,18 @@ test("в интерфейс помещается всё нужное и ниче
     .first()
     .evaluate((node) => node.getBoundingClientRect().height);
   expect(height).toBeGreaterThanOrEqual(44);
+
+  // Сама панель тоже не должна разъезжаться в ширину: на лежачем телефоне ряд
+  // из шести кнопок башен в неё не влезал, и крайняя обрезалась краем.
+  const sideOverflow = await page
+    .locator(".side")
+    .evaluate((node) => node.scrollWidth - node.clientWidth);
+  expect(sideOverflow).toBeLessThanOrEqual(1);
 });
 
-test("версус с ботом: отправка монстров сопернику работает", async ({ page }) => {
+test("версус с ботом: отправка монстров сопернику работает", async ({
+  page,
+}) => {
   await page.goto("/");
   await dismissHelp(page);
   await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
@@ -235,7 +243,10 @@ test("версус с ботом: отправка монстров соперн
   await expect(page.locator(".side")).toContainText("Отправить сопернику");
 
   const goldBefore = Number(
-    (await page.locator(".hud__gold span").last().textContent())!.replace(/\D/g, ""),
+    (await page.locator(".hud__gold span").last().textContent())!.replace(
+      /\D/g,
+      "",
+    ),
   );
 
   const sendButton = page.locator(".sends .send-btn").first();
@@ -243,12 +254,17 @@ test("версус с ботом: отправка монстров соперн
   await page.waitForTimeout(400);
 
   const goldAfter = Number(
-    (await page.locator(".hud__gold span").last().textContent())!.replace(/\D/g, ""),
+    (await page.locator(".hud__gold span").last().textContent())!.replace(
+      /\D/g,
+      "",
+    ),
   );
   expect(goldAfter).toBeLessThan(goldBefore);
 });
 
-test("версус: поле соперника всегда видно и его нельзя застроить", async ({ page }) => {
+test("версус: поле соперника всегда видно и его нельзя застроить", async ({
+  page,
+}) => {
   await page.goto("/");
   await dismissHelp(page);
   await page.getByRole("button", { name: "С ботом Версус против ИИ" }).click();
@@ -274,7 +290,9 @@ test("версус: поле соперника всегда видно и ег�
   await expect(page.locator(".rival__stats")).toContainText("Поле соперника");
 });
 
-test("холст совпадает с местом, которое занимает на экране", async ({ page }) => {
+test("холст совпадает с местом, которое занимает на экране", async ({
+  page,
+}) => {
   // Панели снизу меняют высоту уже после первого замера холста — в версусе
   // к ним добавляется ряд кнопок отправки. Если холст об этом не узнает,
   // картинка рисуется в одном масштабе, а клики считаются в другом, и игрок
@@ -309,7 +327,6 @@ test("улучшение башни сразу видно в панели", asyn
   // не произошло: ни списанного золота, ни нового уровня.
   await startSolo(page);
   await page.waitForTimeout(600);
-
 
   await page.locator('.tower-btn[data-element="fire"]').click();
   const point = await cellPoint(page, 0, 0);
@@ -366,4 +383,148 @@ test("клик по полю работает после того, как мыш
     ),
   );
   expect(goldAfter).toBeLessThan(goldBefore);
+});
+
+test("выход из партии спрашивает подтверждение", async ({ page }) => {
+  // Кнопка выхода стоит рядом со звуком и убивает партию без возврата: ни
+  // сохранений, ни рекорда, а в сетевой партии обрывается и у соперника.
+  await startSolo(page);
+  await page.waitForTimeout(300);
+
+  await page.locator(".hud__btn--exit").click();
+  await expect(page.locator(".overlay h2")).toHaveText("Выйти в меню?");
+  // Поле на месте: пока не подтвердили, партия продолжается.
+  await expect(page.locator(".board canvas")).toBeVisible();
+
+  await page.getByRole("button", { name: "Остаться" }).click();
+  await expect(page.locator(".overlay")).toHaveCount(0);
+  await expect(page.locator(".board canvas")).toBeVisible();
+
+  await page.locator(".hud__btn--exit").click();
+  await page.getByRole("button", { name: "Выйти", exact: true }).click();
+  await expect(page.locator(".menu__title")).toBeVisible();
+});
+
+test("кнопки в шапке не меньше пальца, а выход отодвинут от остальных", async ({
+  page,
+}) => {
+  await startSolo(page);
+  await page.waitForTimeout(300);
+
+  const boxes = await page.locator(".hud__btn").evaluateAll((nodes) =>
+    nodes
+      .filter((node) => (node as HTMLElement).offsetParent !== null)
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { x: rect.x, right: rect.right, w: rect.width, h: rect.height };
+      }),
+  );
+  expect(boxes.length).toBeGreaterThan(1);
+  for (const box of boxes) {
+    expect(box.w).toBeGreaterThanOrEqual(44);
+    expect(box.h).toBeGreaterThanOrEqual(44);
+  }
+
+  // Промах пальцем мимо соседней кнопки должен уходить в пустоту, а не в выход.
+  const last = boxes[boxes.length - 1]!;
+  const before = boxes[boxes.length - 2]!;
+  expect(last.x - before.right).toBeGreaterThanOrEqual(10);
+});
+
+test("выключенный звук остаётся выключенным во второй партии", async ({
+  page,
+}) => {
+  // Движок звука один на страницу и переживает выход в меню. Кнопка рисовалась
+  // с жёстким «🔊», и первое нажатие во второй партии включало звук вместо
+  // выключения, не меняя значка.
+  await startSolo(page);
+  const soundBtn = page.locator('.hud__btn[title="Звук"]');
+  await expect(soundBtn).toHaveText("🔊");
+  await soundBtn.click();
+  await expect(soundBtn).toHaveText("🔇");
+
+  await page.locator(".hud__btn--exit").click();
+  await page.getByRole("button", { name: "Выйти", exact: true }).click();
+  await page.getByRole("button", { name: "Играть", exact: true }).click();
+  await expect(page.locator(".board canvas")).toBeVisible();
+
+  await expect(page.locator('.hud__btn[title="Звук"]')).toHaveText("🔇");
+});
+
+test("Tab в соло не съедается и ходит по кнопкам панели", async ({
+  page,
+  isMobile,
+}) => {
+  // Tab переключает поля в версусе, но в соло поле одно, и перехват просто
+  // отнимал у панели навигацию с клавиатуры.
+  //
+  // Проверяем только на ноутбуке: в мобильной эмуляции Chromium обход по Tab
+  // не работает сам по себе, и проверять там нечего.
+  test.skip(!!isMobile, "навигация по фокусу — про клавиатуру");
+  await startSolo(page);
+  await page.waitForTimeout(300);
+
+  await page.locator('.hud__btn[title="Звук"]').focus();
+  const focused = new Set<string>();
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press("Tab");
+    focused.add(
+      await page.evaluate(
+        () =>
+          `${document.activeElement?.className ?? ""}|${
+            document.activeElement?.textContent ?? ""
+          }`,
+      ),
+    );
+  }
+  expect(focused.size).toBeGreaterThan(1);
+});
+
+test("счётчик нанесённого урона растёт, пока панель открыта", async ({
+  page,
+}) => {
+  // Показатель не входит в слепок панели (иначе она мигала бы на каждый
+  // выстрел), поэтому обновляется отдельным узлом. Пока этого не было, число
+  // стояло на значении момента открытия.
+  await startSolo(page);
+  await page.waitForTimeout(400);
+
+  await page.locator('.tower-btn[data-element="fire"]').click();
+  const point = await cellPoint(page, 0, 0);
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(300);
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator(".inspect__stats")).toContainText("Нанесено");
+
+  const damage = page
+    .locator(".inspect__stats span", { hasText: "Нанесено" })
+    .locator("b");
+  await page.locator('.hud__btn[title*="Скорость"]').click();
+
+  // Панель не трогаем вообще: число обязано вырасти само.
+  await expect
+    .poll(
+      async () => Number((await damage.textContent())!.replace(/\D/g, "")),
+      {
+        timeout: 60_000,
+      },
+    )
+    .toBeGreaterThan(0);
+});
+
+test("кнопка досрочной волны гаснет после призыва и не обещает лишнего", async ({
+  page,
+}) => {
+  // Симуляция принимает призыв не чаще раза в интервал волны. Кнопка об этом
+  // не знала: оставалась активной и показывала тост «волна вызвана досрочно»,
+  // хотя команду отклоняли.
+  await startSolo(page);
+  await page.waitForTimeout(400);
+
+  const rush = page.getByRole("button", { name: "Волна раньше" });
+  await expect(rush).toBeEnabled();
+  await rush.click();
+
+  await expect(rush).toBeDisabled({ timeout: 5000 });
+  await expect(page.locator(".hud__next")).not.toContainText("вызвать сейчас");
 });

@@ -461,7 +461,10 @@ export class App {
     // закрыть вкладку, а прежний запуск создавал локальный матч с пустым
     // вторым полем и оставлял сокет висеть.
     if (!setup.network) {
-      const again = el("button", { class: "btn btn--primary", text: "Ещё раз" });
+      const again = el("button", {
+        class: "btn btn--primary",
+        text: "Ещё раз",
+      });
       again.addEventListener("click", () => {
         overlay.remove();
         this.startMatch(setup);
@@ -515,7 +518,7 @@ export class App {
         }),
       ]),
       el("p", {
-        text: "Клавиши: 1–6 — башни, N — волна раньше, F — скорость, пробел — пауза.",
+        text: "Клавиши: 1–6 — башни, N — волна раньше, F — скорость, пробел — пауза, Tab — поменять поля местами.",
       }),
     ]);
 
@@ -525,7 +528,6 @@ export class App {
     overlay.append(panel);
     this.root.append(overlay);
   }
-
 
   private teardown(): void {
     this.session?.stop();

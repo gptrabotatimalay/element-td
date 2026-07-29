@@ -79,11 +79,14 @@ function drawBase(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillRect(x - 8, y - 8, 16, 16);
 }
 
-/** Запомненные позиции прошлого тика — нужны только для сглаживания. */
+/** Запомненные позиции монстров — нужны только для сглаживания. */
 type PrevPositions = Map<number, { x: number; y: number }>;
 
 export class FieldRenderer {
+  /** Позиции на прошлом тике: от них движение и отсчитывается. */
   private prev: PrevPositions = new Map();
+  /** Позиции на текущем тике — станут прошлыми, когда придёт следующий. */
+  private current: PrevPositions = new Map();
   private lastTick = -1;
 
   /**
@@ -253,10 +256,6 @@ export class FieldRenderer {
     );
   }
 
-
-
-
-
   private drawRanges(field: Field, options: RenderOptions): void {
     const ctx = this.ctx;
 
@@ -318,27 +317,24 @@ export class FieldRenderer {
   }
 
   private drawCreeps(field: Field, tick: number, alpha: number): void {
-    const next: PrevPositions = new Map();
-    const isNewTick = tick !== this.lastTick;
+    if (tick !== this.lastTick) {
+      // Точка отсчёта держится весь тик. Раньше её затирали текущими позициями
+      // на первом же кадре нового тика: дальше монстр рисовался ровно там, где
+      // стоит, и сглаживание жило один кадр из шести. У гостя, где между
+      // состояниями сразу три тика, это выглядело как «постоял — прыгнул».
+      this.prev = this.current;
+      this.current = new Map(
+        field.creeps.map((creep) => [creep.id, { x: creep.x, y: creep.y }]),
+      );
+      this.lastTick = tick;
+    }
 
     for (const creep of field.creeps) {
       const prev = this.prev.get(creep.id);
       // Первый кадр жизни монстра сглаживать не с чем — рисуем как есть.
       const x = prev ? prev.x + (creep.x - prev.x) * alpha : creep.x;
       const y = prev ? prev.y + (creep.y - prev.y) * alpha : creep.y;
-
       this.drawCreep(creep, x, y);
-      next.set(
-        creep.id,
-        isNewTick
-          ? { x: creep.x, y: creep.y }
-          : (prev ?? { x: creep.x, y: creep.y }),
-      );
-    }
-
-    if (isNewTick) {
-      this.prev = next;
-      this.lastTick = tick;
     }
   }
 

@@ -16,6 +16,7 @@ import {
 import { MAPS, getMap } from "../src/core/map";
 import { runGame, summarize } from "../src/core/runner";
 import { applyCommand, createGame, sendCost, step } from "../src/core/sim";
+import { decodeField, encodeSnapshot } from "../src/net/snapshot";
 import type { RunResult } from "../src/core/runner";
 
 const baseOptions = {
@@ -270,7 +271,10 @@ describe("экономика", () => {
 
 describe("комбо-башни", () => {
   /** Ставит две башни на соседние площадки и возвращает их. */
-  function buildPair(element: "fire" | "ice", other: "fire" | "ice" | "lightning") {
+  function buildPair(
+    element: "fire" | "ice",
+    other: "fire" | "ice" | "lightning",
+  ) {
     const state = createGame({ ...baseOptions, difficulty: "easy" });
     const field = state.fields[0]!;
     field.gold = 10_000;
@@ -293,7 +297,12 @@ describe("комбо-башни", () => {
     if (!pair) throw new Error("на карте нет соседних площадок");
 
     applyCommand(state, { t: "build", field: 0, cell: pair[0], element });
-    applyCommand(state, { t: "build", field: 0, cell: pair[1], element: other });
+    applyCommand(state, {
+      t: "build",
+      field: 0,
+      cell: pair[1],
+      element: other,
+    });
     return { state, field, towers: field.towers };
   }
 
@@ -301,7 +310,12 @@ describe("комбо-башни", () => {
     const { state, field } = buildPair("fire", "ice");
     const [a, b] = field.towers;
 
-    const ok = applyCommand(state, { t: "fuse", field: 0, tower: a!.id, with: b!.id });
+    const ok = applyCommand(state, {
+      t: "fuse",
+      field: 0,
+      tower: a!.id,
+      with: b!.id,
+    });
 
     expect(ok).toBe(true);
     expect(field.towers).toHaveLength(1);
@@ -313,7 +327,9 @@ describe("комбо-башни", () => {
   it("одинаковые стихии не сливаются", () => {
     const { state, field } = buildPair("fire", "fire");
     const [a, b] = field.towers;
-    expect(applyCommand(state, { t: "fuse", field: 0, tower: a!.id, with: b!.id })).toBe(false);
+    expect(
+      applyCommand(state, { t: "fuse", field: 0, tower: a!.id, with: b!.id }),
+    ).toBe(false);
     expect(field.towers).toHaveLength(2);
   });
 
@@ -324,13 +340,23 @@ describe("комбо-башни", () => {
 
     const map = getMap(baseOptions.mapId);
     const free = map.buildCells.find((c) => !field.occupied.has(c))!;
-    applyCommand(state, { t: "build", field: 0, cell: free, element: "poison" });
+    applyCommand(state, {
+      t: "build",
+      field: 0,
+      cell: free,
+      element: "poison",
+    });
 
     const fused = field.towers[0]!;
     const third = field.towers[1]!;
-    expect(applyCommand(state, { t: "fuse", field: 0, tower: fused.id, with: third.id })).toBe(
-      false,
-    );
+    expect(
+      applyCommand(state, {
+        t: "fuse",
+        field: 0,
+        tower: fused.id,
+        with: third.id,
+      }),
+    ).toBe(false);
   });
 
   it("комбо накладывает эффекты обеих стихий", () => {
@@ -487,9 +513,7 @@ describe("цены после правок", () => {
 
     // Пять отправок обычных не должны влиять на цену летающих.
     expect(sendCost(field, "flying")).toBe(flyingBefore);
-    expect(sendCost(field, "normal")).toBeGreaterThan(
-      SEND.normal!.cost,
-    );
+    expect(sendCost(field, "normal")).toBeGreaterThan(SEND.normal!.cost);
   });
 
   it("слияние считается от обеих башен, а не только от жертвы", () => {
@@ -514,8 +538,18 @@ describe("цены после правок", () => {
     }
     if (!pair) throw new Error("на карте нет соседних площадок");
 
-    applyCommand(state, { t: "build", field: 0, cell: pair[0], element: "fire" });
-    applyCommand(state, { t: "build", field: 0, cell: pair[1], element: "ice" });
+    applyCommand(state, {
+      t: "build",
+      field: 0,
+      cell: pair[0],
+      element: "fire",
+    });
+    applyCommand(state, {
+      t: "build",
+      field: 0,
+      cell: pair[1],
+      element: "ice",
+    });
     const [main, other] = field.towers;
 
     // Дорогая башня плюс дешёвая: цена должна учитывать вложенное в обе.
@@ -539,5 +573,65 @@ describe("цены после правок", () => {
 
     expect(paid).toBe(expected);
     expect(paid).toBeGreaterThan(cheapSideOnly);
+  });
+});
+
+describe("снимок для гостя", () => {
+  /** Соседние площадки на карте — для проверки ауры света. */
+  function adjacentPair(mapId: string): [number, number] {
+    const map = getMap(mapId);
+    for (const a of map.buildCells) {
+      for (const b of map.buildCells) {
+        if (a === b) continue;
+        if (
+          Math.abs((a % 15) - (b % 15)) <= 1 &&
+          Math.abs(Math.floor(a / 15) - Math.floor(b / 15)) <= 1
+        ) {
+          return [a, b];
+        }
+      }
+    }
+    throw new Error("на карте нет соседних площадок");
+  }
+
+  it("нанесённый урон доезжает до гостя", () => {
+    const state = createGame({ ...baseOptions, difficulty: "easy" });
+    const field = state.fields[0]!;
+    field.gold = 100_000;
+    const [cell] = adjacentPair(baseOptions.mapId);
+    applyCommand(state, { t: "build", field: 0, cell, element: "fire" });
+
+    // Даём башне пострелять, иначе проверять нечего.
+    for (let i = 0; i < TICK_RATE * 60; i++) step(state);
+    const tower = field.towers[0]!;
+    expect(tower.damageDealt).toBeGreaterThan(0);
+
+    const guest = decodeField(encodeSnapshot(state).fields[0]!, 0);
+    expect(guest.towers[0]!.damageDealt).toBe(Math.round(tower.damageDealt));
+  });
+
+  it("ауры у гостя пересчитываются, а не теряются", () => {
+    const state = createGame({ ...baseOptions, difficulty: "easy" });
+    const field = state.fields[0]!;
+    field.gold = 100_000;
+    const [a, b] = adjacentPair(baseOptions.mapId);
+    applyCommand(state, { t: "build", field: 0, cell: a, element: "fire" });
+    applyCommand(state, { t: "build", field: 0, cell: b, element: "light" });
+
+    const fire = field.towers[0]!;
+    const aura = field.auraCache.get(fire.id);
+    expect(aura?.rangeMult).toBeGreaterThan(1);
+
+    // У гостя тот же множитель: иначе круг дальности рисуется меньше зоны
+    // поражения, и башни ставятся не туда.
+    const guest = decodeField(encodeSnapshot(state).fields[0]!, 0);
+    expect(guest.auraCache.get(fire.id)?.rangeMult).toBe(aura!.rangeMult);
+    expect(guest.auraCache.get(fire.id)?.damageMult).toBe(aura!.damageMult);
+  });
+
+  it("пауза хоста едет в снимке", () => {
+    const state = createGame(baseOptions);
+    expect(encodeSnapshot(state).paused).toBe(false);
+    expect(encodeSnapshot(state, true).paused).toBe(true);
   });
 });

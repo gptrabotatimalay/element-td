@@ -294,7 +294,6 @@ body {
   gap: 4px;
 }
 
-
 .hud__stat {
   display: flex;
   align-items: baseline;
@@ -320,9 +319,10 @@ body {
   color: var(--parchment);
 }
 
+/* Палец не попадает в 36 точек: промах со звука уходил в выход из партии. */
 .hud__btn {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: var(--tap);
+  min-height: var(--tap);
   padding: 0 6px;
   border: 2px solid var(--frame-light);
   border-radius: 6px;
@@ -335,6 +335,11 @@ body {
 .hud__btn[aria-pressed="true"] {
   border-color: var(--gold);
   color: var(--gold);
+}
+
+/* Выход отодвинут от остальных: промах пальцем должен уходить в пустоту. */
+.hud__btn--exit {
+  margin-left: 12px;
 }
 
 .hud__next {
@@ -613,6 +618,11 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  /* По той же причине показатели и четыре кнопки не встают в одну строку. */
+  .hud {
+    grid-template-columns: 1fr;
+  }
+
   .tower-btn,
   .send-btn {
     min-height: 46px;
@@ -758,23 +768,9 @@ body {
 /* ── Узкие экраны ────────────────────────────────────────────────────────── */
 
 /*
- * Вертикальный телефон. Поле 3:2 в такой экран влезает только узкой лентой,
- * поэтому подсказываем повернуть телефон — в ландшафте поле вдвое крупнее.
+ * Подсказки «поверни телефон» здесь больше нет: поле само разворачивается на
+ * четверть оборота, если так оно помещается крупнее (FieldRenderer.fit).
  */
-.rotate-hint {
-  display: none;
-  padding: 6px 10px;
-  font-size: 12px;
-  text-align: center;
-  color: var(--muted);
-  background: var(--frame);
-}
-
-@media (orientation: portrait) and (max-width: 560px) {
-  .rotate-hint {
-    display: block;
-  }
-}
 
 @media (max-width: 560px) {
   .hud {
@@ -804,51 +800,19 @@ body {
 }
 
 /*
- * Лежачий телефон. Высоты всего 390 точек, и панель в три ряда съедала две
- * трети экрана — поле оставалось узкой полоской. Поэтому здесь всё в один
- * ряд и мельче: кнопки остаются в пределах пальца, но перестают воевать
- * с игровым полем за место.
+ * Совсем низкий лежачий экран — добавка к блоку выше (max-height: 500px).
+ *
+ * Раньше здесь лежала раскладка с нижней панелью: правила для .dock, шесть
+ * кнопок башен в ряд и действия в столбик. Панели снизу давно нет, класса
+ * .dock разметка не создаёт, а вот живые правила из этого блока перебивали
+ * соседний: шесть кнопок в панель 250 точек не влезали и вылезали за её край,
+ * а две кнопки действий вставали друг под друга и съедали высоту.
  */
 @media (max-height: 480px) and (orientation: landscape) {
-  .dock {
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 6px;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
-  }
-
-  .towers {
-    grid-template-columns: repeat(6, minmax(38px, 1fr));
-    gap: 4px;
-    flex: 1;
-  }
-
-  .tower-btn {
-    min-height: 44px;
-    font-size: 9px;
-    gap: 1px;
-    padding: 3px 1px;
-  }
-
-  .tower-btn canvas {
-    width: 18px;
-    height: 18px;
-  }
-
-  .actions {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-
   .actions .btn {
     min-height: 38px;
     min-width: 0;
     font-size: 11px;
-  }
-
-  /* Подпись над отправкой в лежачем режиме только отнимает высоту. */
-  .dock .menu__label {
-    display: none;
   }
 
   .inspect {
@@ -857,10 +821,6 @@ body {
   }
 
   .inspect__desc {
-    display: none;
-  }
-
-  .rotate-hint {
     display: none;
   }
 }

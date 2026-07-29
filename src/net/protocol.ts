@@ -24,7 +24,7 @@ import type {
 } from "../core/types";
 
 /** Версия протокола: при несовпадении клиенты честно скажут об этом. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export interface RoomConfig {
   mode: Extract<GameMode, "versus" | "coop">;
@@ -97,8 +97,12 @@ export type CreepTuple = [
   number,
 ];
 
-/** [id, cell, element, level, targetMode, вторая стихия или -1, вложено золота] */
+/**
+ * [id, cell, element, level, targetMode, вторая стихия или -1, вложено золота,
+ * нанесено урона]
+ */
 export type TowerTuple = [
+  number,
   number,
   number,
   number,
@@ -136,6 +140,13 @@ export interface Snapshot {
   fields: FieldSnapshot[];
   over: boolean;
   winner: number | null;
+  /**
+   * Стоит ли партия на паузе у хоста.
+   *
+   * Без этого пауза хоста просто замораживала у гостя и поле, и показатели —
+   * от обрыва связи он это отличить не мог.
+   */
+  paused: boolean;
 }
 
 // ── Кодирование перечислений ────────────────────────────────────────────────

@@ -43,6 +43,12 @@ const SNAPSHOT_EVERY_TICKS = 3;
 const MINIMAP_INTERVAL_MS = 100;
 
 /**
+ * Дольше этого промежуток между снимками уже не сглаживание, а провал связи:
+ * растягивать на него движение монстров нельзя, они поедут в час по чайной.
+ */
+const MAX_SNAPSHOT_SPAN_MS = 400;
+
+/**
  * Плотность пикселей холста.
  *
  * Ограничение двойкой оставляло экраны с плотностью 3 без целого числа
@@ -132,6 +138,12 @@ export class GameSession {
   /** Последний снимок от хоста — гость рисует именно его. */
   private lastSnapshotTick = -1;
   private lastSnapshotAt = 0;
+  /** Замеренный промежуток между двумя последними снимками. */
+  private snapshotSpan = STEP_MS * SNAPSHOT_EVERY_TICKS;
+  /** Партия остановлена хостом — гостю надо сказать об этом словами. */
+  hostPaused = false;
+  /** О какой паузе гость уже знает: сообщаем только о смене. */
+  private announcedPause = false;
   private prevLives = -1;
   private prevWave = -1;
   private prevProjectiles = 0;
@@ -225,19 +237,33 @@ export class GameSession {
   applySnapshot(snapshot: Snapshot): void {
     if (this.role !== "guest") return;
     // Снимки могут прийти не по порядку — старые игнорируем, иначе
-    // картинка будет дёргаться назад во времени.
-    if (snapshot.tick <= this.lastSnapshotTick) return;
+    // картинка будет дёргаться назад во времени. Исключение — сообщение о
+    // паузе: пока хост стоит, тик не растёт, а сказать об этом надо.
+    const pauseChanged = (snapshot.paused === true) !== this.hostPaused;
+    if (snapshot.tick <= this.lastSnapshotTick && !pauseChanged) return;
     this.lastSnapshotTick = snapshot.tick;
 
     this.state.tick = snapshot.tick;
     this.state.fields = snapshot.fields.map((field, index) =>
       decodeField(field, index),
     );
+    this.hostPaused = snapshot.paused === true;
     // Гость не считает партию, поэтому накопитель у него всегда нулевой, а
     // вместе с ним и сглаживание. Двигаем его вручную, чтобы монстры между
     // снимками ехали плавно, а не прыгали десять раз в секунду.
     this.accumulator = 0;
-    this.lastSnapshotAt = performance.now();
+    const now = performance.now();
+    // Промежуток между снимками замеряем, а не считаем постоянным: хост шлёт
+    // их раз в три тика, но на скорости 2× и 3× это уже не сто миллисекунд, да
+    // и сеть добавляет разброс. С постоянным знаменателем монстры не доезжали
+    // до присланной позиции и рывком прыгали к ней на следующем снимке.
+    if (this.lastSnapshotAt > 0) {
+      const span = now - this.lastSnapshotAt;
+      if (span >= STEP_MS && span <= MAX_SNAPSHOT_SPAN_MS) {
+        this.snapshotSpan = span;
+      }
+    }
+    this.lastSnapshotAt = now;
 
     // Гость не считает партию, поэтому журнала событий у него нет: без этого
     // он не слышал ни выстрелов, ни утечки жизни и не видел ни одной вспышки.
@@ -305,10 +331,7 @@ export class GameSession {
   resize(): void {
     this.fitCanvas(this.canvas, (view) => (this.view = view));
     if (this.minimapCanvas) {
-      this.fitCanvas(
-        this.minimapCanvas,
-        (view) => (this.minimapView = view),
-      );
+      this.fitCanvas(this.minimapCanvas, (view) => (this.minimapView = view));
     }
   }
 
@@ -376,10 +399,15 @@ export class GameSession {
     // У гостя время между снимками играет роль накопителя: снимки приходят
     // раз в три тика, и без этого движение выглядело бы рывками.
     if (this.role === "guest" && this.lastSnapshotAt > 0) {
-      this.accumulator = Math.min(
-        STEP_MS * SNAPSHOT_EVERY_TICKS,
-        now - this.lastSnapshotAt,
-      );
+      this.accumulator = Math.min(this.snapshotSpan, now - this.lastSnapshotAt);
+    }
+
+    // Пауза не едет вместе с тиками: пока партия стоит, tick() не вызывается,
+    // и снимки не уходят вовсе. Поэтому о самой смене состояния сообщаем
+    // отдельным снимком — иначе у гостя просто замирал экран без объяснений.
+    if (this.role === "host" && this.paused !== this.announcedPause) {
+      this.announcedPause = this.paused;
+      this.net?.client.sendSnapshot(encodeSnapshot(this.state, this.paused));
     }
 
     this.effects.update(dt / 1000);
@@ -407,7 +435,7 @@ export class GameSession {
     }
 
     if (this.role === "host" && this.state.tick % SNAPSHOT_EVERY_TICKS === 0) {
-      this.net?.client.sendSnapshot(encodeSnapshot(this.state));
+      this.net?.client.sendSnapshot(encodeSnapshot(this.state, this.paused));
     }
 
     if (!wasOver && this.state.over) {
@@ -469,7 +497,9 @@ export class GameSession {
     // радиуса там быть не должно: они обещают действие, которого не будет.
     const own = this.playerField === this.ownField;
     const previewRange =
-      own && this.placement.kind === "build" && this.placement.element !== "light"
+      own &&
+      this.placement.kind === "build" &&
+      this.placement.element !== "light"
         ? towerRange(this.placement.element, 1)
         : null;
 
@@ -550,8 +580,7 @@ export class GameSession {
 
   /** Доля пути между последними двумя состояниями, 0..1. */
   private smoothing(): number {
-    const span =
-      this.role === "guest" ? STEP_MS * SNAPSHOT_EVERY_TICKS : STEP_MS;
+    const span = this.role === "guest" ? this.snapshotSpan : STEP_MS;
     return Math.min(1, this.accumulator / span);
   }
 
